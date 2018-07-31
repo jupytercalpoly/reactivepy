@@ -1,22 +1,24 @@
 
 from ipykernel.kernelbase import Kernel
-
-import re
+import sys
 
 __version__ = '0.1.0'
 
 
 class ReactivePythonKernel(Kernel):
-    implementation = 'reactive_kernel  '
+    implementation = 'reactive_python'
     implementation_version = __version__
     language_info = {
-        'name': 'reactive_kernel',
+        'name': 'python',
+        'version': sys.version.split()[0],
         'mimetype': 'text/x-python',
-        'file_extension': '.py',
+        'nbconvert_exporter': 'python',
+        'file_extension': '.py'
     }
+    banner = ''
 
-    def __init__(self):
-        pass
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
     def do_execute(self, code, silent, store_history=True, user_expressions=None,
                    allow_stdin=False):

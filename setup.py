@@ -34,7 +34,7 @@ def install_kernel_spec(user=True, prefix=None):
 
         print('Installing Jupyter kernel spec to', prefix)
         KernelSpecManager().install_kernel_spec(
-            td, 'reactive_kernel', user=user, replace=True, prefix=prefix)
+            td, 'reactive_kernel', user=user, prefix=prefix)
 
 
 def _is_root():
