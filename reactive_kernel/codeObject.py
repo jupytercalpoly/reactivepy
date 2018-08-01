@@ -32,6 +32,6 @@ class CodeObject:
 
 
 class MultipleDefinitionsError(Exception):
-    """ Thrown if more that one variable defined in cell
+    """ Attempted to define more than one local variable
     """
     pass
