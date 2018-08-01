@@ -30,6 +30,12 @@ class CodeObject:
         else:
             return output_vars
 
+    def __hash__(self):
+        return hash(self.input_vars)
+
+    def __eq__(self, other):
+        return self.input_vars == other.input_vars
+
 
 class MultipleDefinitionsError(Exception):
     """ Attempted to define more than one local variable
