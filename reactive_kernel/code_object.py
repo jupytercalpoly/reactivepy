@@ -9,7 +9,7 @@ class CodeObject:
         self.output_vars = self._find_output_variables()
 
     def _find_input_variables(self):
-        return frozenset(self._find_symbol_tables(self.symbol_table))
+        return list(self._find_symbol_tables(self.symbol_table))
 
     def _find_symbol_tables(self, symbols):
         for sym in symbols.get_symbols():
@@ -28,7 +28,7 @@ class CodeObject:
         if len(output_vars) > 1:
             raise MultipleDefinitionsError()
         else:
-            return output_vars
+            return frozenset(output_vars)
 
     def __hash__(self):
         return hash(self.input_vars)
