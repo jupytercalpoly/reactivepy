@@ -37,7 +37,6 @@ class CodeObject:
         raise MultipleDefinitionsError()
 
 class MultipleDefinitionsError(Exception):
-    """ Thrown if more that one variable defined in cell 
+    """ Attempted to define more than one local variable
     """
-    def __init__(self):
-        self.expr = "Attempted to define more than one local variable"
+    pass
