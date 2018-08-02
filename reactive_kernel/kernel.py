@@ -19,6 +19,7 @@ class ReactivePythonKernel(Kernel):
 
     #Creating a kernel of class Execute Kernel
     innerKernel = ExecuteKernel()
+    namespace = {}
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -28,24 +29,26 @@ class ReactivePythonKernel(Kernel):
 
         self.silent = silent
 
+
         if not silent:
             try: 
-                obj = CodeObject(code)
+                #obj = CodeObject(code)
+                exec(code, globals(), self.namespace)
             except Exception as e:
                 error_content = {'ename': str(e.__class__), 'evalue': e.__doc__, 'traceback': []}
                 self.send_response(self.iopub_socket, 'error', error_content)
                 error_content['status'] = 'error'
                 return error_content
-            stream_content = {'name': 'stdout', 'text': str(obj.input_vars)}
+            stream_content = {'name': 'stdout', 'text': str(self.namespace)}
             self.send_response(self.iopub_socket, 'stream', stream_content)
         
-        some_dict = self.innerKernel.do_execute(code, silent)
+        #exec(obj, store_history, try)
+        #assigns some_dict to the dictionary returned by do_execute
+        #some_dict = self.innerKernel.do_execute(code, silent)
 
-        #return some_dict
-
-        return {'status': some_dict[u'status'],
+        return {'status': 'ok',
                 # The base class increments the execution count
-                'execution_count': some_dict[u'execution_count'],
-                'payload': some_dict[u'payload'],
-                'user_expressions': some_dict[u'user expressions'],
-                }
+                'execution_count': self.execution_count,
+                'payload': {},
+                'user_expressions': [],
+            }
