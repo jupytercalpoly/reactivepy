@@ -1,7 +1,7 @@
 from ipykernel.kernelbase import Kernel
 import sys
 from .codeObject import CodeObject
-
+from .execute import ExecuteKernel
 __version__ = '0.1.0'
 
 
@@ -17,12 +17,14 @@ class ReactivePythonKernel(Kernel):
     }
     banner = ''
 
+    innerKernel = ExecuteKernel()
+
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
     def do_execute(self, code, silent, store_history=True, user_expressions=None,
                    allow_stdin=False):
-
         if not silent:
             try: 
                 obj = CodeObject(code)
@@ -33,6 +35,8 @@ class ReactivePythonKernel(Kernel):
                 return error_content
             stream_content = {'name': 'stdout', 'text': str(obj.input_vars)}
             self.send_response(self.iopub_socket, 'stream', stream_content)
+
+        self.innerKernel.do_execute(code, silent=silent)
 
         return {'status': 'ok',
                 # The base class increments the execution count
