@@ -2,22 +2,85 @@ import getpass
 import sys
 
 from IPython.core import release
-from ipykernel.kernelbase import Kernel
+from ipykernel.kernelbase import Kernel as KernelBase
 from ipykernel.zmqshell import ZMQInteractiveShell
 from ipython_genutils.py3compat import builtin_mod, PY3, unicode_type, safe_unicode
 from IPython.utils.tokenutil import token_at_cursor, line_at_cursor
 from traitlets import Instance, Type, Any, List, Bool
 from ipykernel.ipkernel import IPythonKernel
-from ipkernel.comm import CommManager
+from ipykernel.comm import CommManager
 
-class ExecuteKernel(IPythonKernel):
+
+class ExecuteKernel(KernelBase):
     shell = Instance('IPython.core.interactiveshell.InteractiveShellABC',
                      allow_none=True)
     shell_class = Type(ZMQInteractiveShell)
 
+    user_module = Any()
+    def _user_module_changed(self, name, old, new):
+        if self.shell is not None:
+            self.shell.user_module = new
+
+    user_ns = Instance(dict, args=None, allow_none=True)
+    def _user_ns_changed(self, name, old, new):
+        if self.shell is not None:
+            self.shell.user_ns = new
+            self.shell.init_user_ns()
+
+
     def __init__(self, **kwargs):
-        super(IPythonKernel, self).__init__(**kwargs)
+        super(ExecuteKernel, self).__init__(**kwargs)
+        
         #self.shell = self.shell_class
+
+        # Initialize the InteractiveShell subclass
+        self.shell = self.shell_class.instance(parent=self,
+            profile_dir = self.profile_dir,
+            user_module = self.user_module,
+            user_ns     = self.user_ns,
+            kernel      = self,
+        )
+
+        self.shell.displayhook.session = self.session
+        self.shell.displayhook.pub_socket = self.iopub_socket
+        self.shell.displayhook.topic = self._topic('execute_result')
+        self.shell.display_pub.session = self.session
+        self.shell.display_pub.pub_socket = self.iopub_socket
+        self.comm_manager = CommManager(parent=self, kernel=self)
+
+        self.shell.configurables.append(self.comm_manager)
+        comm_msg_types = [ 'comm_open', 'comm_msg', 'comm_close' ]
+        for msg_type in comm_msg_types:
+            self.shell_handlers[msg_type] = getattr(self.comm_manager, msg_type)
+        
+    
+    def _forward_input(self, allow_stdin=False):
+        """Forward raw_input and getpass to the current frontend.
+        via input_request
+        """
+        self._allow_stdin = allow_stdin
+
+        if PY3:
+            self._sys_raw_input = builtin_mod.input
+            builtin_mod.input = self.raw_input
+        else:
+            self._sys_raw_input = builtin_mod.raw_input
+            self._sys_eval_input = builtin_mod.input
+            builtin_mod.raw_input = self.raw_input
+            builtin_mod.input = lambda prompt='': eval(self.raw_input(prompt))
+        self._save_getpass = getpass.getpass
+        getpass.getpass = self.getpass
+
+    def _restore_input(self):
+        """Restore raw_input, getpass"""
+        if PY3:
+            builtin_mod.input = self._sys_raw_input
+        else:
+            builtin_mod.raw_input = self._sys_raw_input
+            builtin_mod.input = self._sys_eval_input
+
+        getpass.getpass = self._save_getpass
+
 
     def do_execute(self, code, silent, store_history=True,
                    user_expressions=None, allow_stdin=False):
@@ -25,7 +88,7 @@ class ExecuteKernel(IPythonKernel):
 
         self._forward_input(allow_stdin)
 
-        reply_content = {}
+        reply_content = {} #return a dictionary
         try:
             res = shell.run_cell(code, store_history=store_history, silent=silent)
         finally:
