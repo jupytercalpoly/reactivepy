@@ -173,7 +173,19 @@ class DependencyTracker:
         return list(
             map(lambda child: self._nodes[child], self._edges[output_vars]))
 
-    # TODO implement get descendent nodes
+    def get_descendants(self, node):
+        output_vars = node.output_vars
+
+        if output_vars not in self._nodes:
+            raise CodeObjectNotFoundException()
+
+        return list(self._get_descendants(output_vars))
+
+    def _get_descendants(self, output_vars):
+        yield self._nodes[output_vars]
+
+        for descendent in self._edges[output_vars]:
+            yield from self._get_descendants(descendent)
 
     def __contains__(self, code):
         """Test whether code object is already present in dependency tracker"""
