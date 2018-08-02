@@ -37,7 +37,10 @@ class CyclicDependencyIntroducedException(Exception):
 class DependencyTracker:
     """Track dependencies between code objects and maintain a topological ordering of nodes
 
-    Uses an incremental topological ordering algorithm to detect cycles and maintain order
+    Uses an incremental topological ordering algorithm to detect cycles and maintain order.
+
+    Paper:
+    http://www.doc.ic.ac.uk/~phjk/Publications/DynamicTopoSortAlg-JEA-07.pdf
     """
 
     def __init__(self):
@@ -141,6 +144,8 @@ class DependencyTracker:
         for node in change_forward:
             L.append(node)
             R.append(self._ordering[node])
+
+        R = sorted(R)
 
         for (node, order_value) in zip(L, R):
             self._ordering[node] = order_value
