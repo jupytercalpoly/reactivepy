@@ -1,7 +1,7 @@
 from ipykernel.kernelbase import Kernel
 import sys
 from .codeObject import CodeObject
-from .execute import ExecuteKernel
+from .execute import ExecutionContext
 __version__ = '0.1.0'
 
 
@@ -17,9 +17,8 @@ class ReactivePythonKernel(Kernel):
     }
     banner = ''
 
-    #Creating a kernel of class Execute Kernel
-    innerKernel = ExecuteKernel()
-    namespace = {}
+    #Creating a kernel of class ExecuteKernel
+    innerKernel = ExecutionContext()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -29,22 +28,17 @@ class ReactivePythonKernel(Kernel):
 
         self.silent = silent
 
-
         if not silent:
             try: 
                 #obj = CodeObject(code)
-                exec(code, globals(), self.namespace)
+                self.innerKernel.exec_code(code)
             except Exception as e:
                 error_content = {'ename': str(e.__class__), 'evalue': e.__doc__, 'traceback': []}
                 self.send_response(self.iopub_socket, 'error', error_content)
                 error_content['status'] = 'error'
                 return error_content
-            stream_content = {'name': 'stdout', 'text': str(self.namespace)}
+            stream_content = {'name': 'stdout', 'text': str(self.innerKernel.namespace)}
             self.send_response(self.iopub_socket, 'stream', stream_content)
-        
-        #exec(obj, store_history, try)
-        #assigns some_dict to the dictionary returned by do_execute
-        #some_dict = self.innerKernel.do_execute(code, silent)
 
         return {'status': 'ok',
                 # The base class increments the execution count
