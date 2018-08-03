@@ -152,6 +152,10 @@ class DependencyTracker:
         self._backward_edges.rollback()
 
     def add_node(self, code):
+        """"Add a new code object to the dependency graph
+
+        Initially this object has no dependencies
+        """
         output_vars = code.output_vars
         if output_vars in self._nodes:
             raise DuplicateCodeObjectAddedException()
@@ -166,6 +170,7 @@ class DependencyTracker:
         self._ordering[output_vars] = max_order_value + 1
 
     def replace_node(self, code):
+        """Replace node with the same output variables with a new node"""
         output_vars = code.output_vars
         if output_vars not in self._nodes:
             raise CodeObjectNotFoundException()
@@ -267,7 +272,7 @@ class DependencyTracker:
         self._backward_edges[to_output_vars].remove(from_output_vars)
 
     def get_children(self, node):
-        """Get dependent objects for given object"""
+        """Get directly dependent objects for given object"""
         output_vars = node.output_vars
 
         if output_vars not in self._nodes:
@@ -277,6 +282,7 @@ class DependencyTracker:
             map(lambda child: self._nodes[child], self._edges[output_vars]))
 
     def get_descendants(self, node):
+        """Get all code objects that transitively depend on the given object"""
         output_vars = node.output_vars
 
         if output_vars not in self._nodes:
