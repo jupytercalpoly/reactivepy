@@ -70,19 +70,33 @@ class ReactivePythonKernel(Kernel):
         to_delete = old_input_vars - new_input_vars
         to_add = new_input_vars - old_input_vars
 
-        self.dep_tracker.replace_node(new_code_obj)
+        self.dep_tracker.start_transaction()
 
-        for sym in to_delete:
-            defining_code = self.dep_tracker.get_code_defining_symbol(sym)
-            self.dep_tracker.delete_edge(defining_code, new_code_obj)
+        try:
+            self.dep_tracker.replace_node(new_code_obj)
 
-        for sym in to_add:
-            defining_code = self.dep_tracker.get_code_defining_symbol(sym)
-            self.dep_tracker.add_edge(defining_code, new_code_obj)
+            for sym in to_delete:
+                defining_code = self.dep_tracker.get_code_defining_symbol(sym)
+                self.dep_tracker.delete_edge(defining_code, new_code_obj)
+
+            for sym in to_add:
+                defining_code = self.dep_tracker.get_code_defining_symbol(sym)
+                self.dep_tracker.add_edge(defining_code, new_code_obj)
+
+            self.dep_tracker.commit()
+        except Exception as e:
+            # rollback changes made to dep graph
+            self.dep_tracker.rollback()
+
+            raise e
 
     def _register_new_code_object(self, code_obj):
         self.dep_tracker.add_node(code_obj)
 
+        self.dep_tracker.start_transaction()
+
         for sym in code_obj.input_vars:
             defining_code = self.dep_tracker.get_code_defining_symbol(sym)
             self.dep_tracker.add_edge(defining_code, code_obj)
+
+        self.dep_tracker.commit()

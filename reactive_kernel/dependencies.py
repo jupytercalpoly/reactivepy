@@ -1,6 +1,8 @@
 from collections import defaultdict
 from .code_object import CodeObject
 import sys
+from collections import UserDict
+import copy
 
 
 class DuplicateCodeObjectAddedException(Exception):
@@ -34,6 +36,83 @@ class CyclicDependencyIntroducedException(Exception):
     pass
 
 
+class CommitNeverStartedException(Exception):
+    """Commit was never started"""
+    pass
+
+
+class TransactionDict(UserDict):
+    _tombstone = object()
+
+    def __init__(self, *args, **kwargs):
+        super(TransactionDict, self).__init__(*args, **kwargs)
+
+        self._dirty_values = dict()
+        self._started_commit = False
+
+    def __getitem__(self, key):
+        if key in self._dirty_values:
+            return self._dirty_values[key]
+
+        if key in self.data:
+            if self._started_commit:
+                self._dirty_values[key] = copy.copy(self.data[key])
+                return self._dirty_values[key]
+            else:
+                return self.data[key]
+
+        raise KeyError(key)
+
+    def __setitem__(self, key, item):
+        if self._started_commit:
+            self._dirty_values[key] = item
+        else:
+            self.data[key] = item
+
+    def __contains__(self, key):
+        return key in self._dirty_values or key in self.data
+
+    def __delitem__(self, key):
+        if self._started_commit:
+            self._dirty_values[key] = TransactionDict._tombstone
+        else:
+            del self.data[key]
+
+    def __iter__(self):
+        return iter(set(self.data.keys()) | set(self._dirty_values.keys()))
+
+    def __len__(self):
+        return len(set(self._dirty_values.keys()) |
+                   set(self._dirty_values.keys()))
+
+    def __repr__(self):
+        temp_dict = dict()
+
+        temp_dict.update(self.data)
+        temp_dict.update(self._dirty_values)
+
+        return repr(temp_dict)
+
+    def start_transaction(self):
+        self._started_commit = True
+
+    def commit(self):
+        if not self._started_commit:
+            raise CommitNeverStartedException()
+        for key in self._dirty_values:
+            if self._dirty_values[key] == TransactionDict._tombstone:
+                del self.data[key]
+            else:
+                self.data[key] = self._dirty_values[key]
+
+        self._dirty_values.clear()
+        self._started_commit = False
+
+    def rollback(self):
+        self._dirty_values.clear()
+        self._started_commit = False
+
+
 class DependencyTracker:
     """Track dependencies between code objects and maintain a topological ordering of nodes
 
@@ -45,14 +124,32 @@ class DependencyTracker:
 
     def __init__(self):
         # exported variable(s) -> integer value denoting topological ordering
-        self._ordering = dict()
+        self._ordering = TransactionDict()
         # exported variable(s) -> code object node
-        self._nodes = dict()
+        self._nodes = TransactionDict()
         # exported variable(s) -> set of descendent variable(s)
-        self._edges = dict()
-        self._backward_edges = dict()
+        self._edges = TransactionDict()
+        self._backward_edges = TransactionDict()
         # variable -> code object that defines it
-        self._symbol_definitions = dict()
+        self._symbol_definitions = TransactionDict()
+
+    def start_transaction(self):
+        self._ordering.start_transaction()
+        self._nodes.start_transaction()
+        self._edges.start_transaction()
+        self._backward_edges.start_transaction()
+
+    def commit(self):
+        self._ordering.commit()
+        self._nodes.commit()
+        self._edges.commit()
+        self._backward_edges.commit()
+
+    def rollback(self):
+        self._ordering.rollback()
+        self._nodes.rollback()
+        self._edges.rollback()
+        self._backward_edges.rollback()
 
     def add_node(self, code):
         output_vars = code.output_vars
@@ -76,6 +173,10 @@ class DependencyTracker:
         self._nodes[output_vars] = code
 
     def add_edge(self, from_code, to_code):
+        """Add new edge to dependency graph
+
+        Return boolean, False if edge already existed, True if edge was successfully added
+        """
         from_output_vars = from_code.output_vars
         to_output_vars = to_code.output_vars
 
@@ -83,7 +184,7 @@ class DependencyTracker:
             raise CodeObjectNotFoundException()
 
         if to_output_vars in self._edges[from_output_vars]:
-            raise DuplicateEdgeAddedException()
+            return False
 
         # Actually add edge to both collections
         self._edges[from_output_vars].add(to_output_vars)
@@ -104,6 +205,8 @@ class DependencyTracker:
                 from_output_vars, visited, change_backward, lower_bound)
 
             self._reorder(change_forward, change_backward)
+
+        return True
 
     def _dfs_forward(self, node,
                      visited, output, upper_bound):
