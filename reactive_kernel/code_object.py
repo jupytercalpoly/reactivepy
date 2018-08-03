@@ -34,7 +34,9 @@ class CodeObject:
         return hash(self.input_vars)
 
     def __eq__(self, other):
-        return self.input_vars == other.input_vars
+        if isinstance(other, CodeObject):
+            return self.input_vars == other.input_vars
+        return False
 
     def __repr__(self):
         return f"<Code in:{str(self.input_vars)} out:{str(list(self.output_vars))} code:\"{self.code}\">"
@@ -50,7 +52,9 @@ class SymbolWrapper:
         return self._symbol.__getattribute__(attr)
 
     def __eq__(self, other):
-        return self._symbol.get_name() == other.get_name()
+        if isinstance(other, SymbolWrapper):
+            return self._symbol.get_name() == other.get_name()
+        return False
 
     def __hash__(self):
         return hash(self._symbol.get_name())
