@@ -3,10 +3,11 @@ import sys
 
 
 class CapturedIO(object):
-    def __init__(self, stdout, stderr, outputs):
+    def __init__(self, log_func, stdout, stderr, outputs):
         self._stdout = stdout
         self._stderr = stderr
         self._outputs = outputs
+        self.log = log_func
 
     @property
     def stdout(self):
@@ -46,9 +47,6 @@ class CapturingDisplayHook(object):
 
 
 class CaptureObject(object):
-    stdout = True
-    stderr = True
-
     def __init__(self, log_func=None, stdout=True, stderr=True):
         self.stdout = stdout
         self.stderr = stderr
@@ -66,15 +64,10 @@ class CaptureObject(object):
         if self.stderr:
             stderr = sys.stderr = io.StringIO()
 
-        self.log('Overriding displayhook')
-        self.save_display_hook = sys.displayhook
-        sys.displayhook = CapturingDisplayHook(
-            outputs=outputs, log_func=self.log)
-
-        return CapturedIO(stdout, stderr, outputs)
+        return CapturedIO(self.log, stdout, stderr, outputs)
 
     def __exit__(self, exc_type, exc_value, traceback):
         sys.stdout = self.sys_stdout
         sys.stderr = self.sys_stderr
-        sys.displayhook = self.save_display_hook
+        # sys.displayhook = self.save_display_hook
         self.log('Exiting capture context')

@@ -2,6 +2,7 @@ from ipykernel.kernelbase import Kernel
 import sys
 from .codeObject import CodeObject
 from .execute import ExecutionContext
+from .capturedObject import CaptureObject
 import traceback as tb
 __version__ = '0.1.0'
 
@@ -31,16 +32,10 @@ class ReactivePythonKernel(Kernel):
 
         if not silent:
             try:
-                exec_ctx = self.innerKernel.exec_code(code)
-                output = next(exec_ctx)
-                self._log(f"Stdout: \"{str(output.stdout)}\"")
-                self._log(f"Stderr: \"{str(output.stderr)}\"")
-                self._log(f"Outputs: \"{str(output.outputs)}\"")
+                with CaptureObject(log_func=self._log) as s:
+                    self.innerKernel._run_cell(code)
+                    self._log(s.stdout)
 
-                try:
-                    next(exec_ctx)
-                except StopIteration:
-                    pass
             except Exception as e:
                 formatted_lines = tb.format_exc().splitlines()
 
