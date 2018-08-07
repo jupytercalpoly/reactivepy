@@ -1,9 +1,10 @@
 from ipykernel.kernelbase import Kernel
 import sys
-from .codeObject import CodeObject
+from .code_object import CodeObject
 from .execute import ExecutionContext
 from .captured_io import CapturedIOCtx
 import traceback as tb
+from .captured_display import CapturedDisplayCtx
 __version__ = '0.1.0'
 
 
@@ -28,7 +29,7 @@ class ReactivePythonKernel(Kernel):
 
         if not silent:
             try:
-                with CapturedIOCtx() as captured_io:
+                with CapturedIOCtx() as captured_io, CapturedDisplayCtx(log_func=self.log) as a:
                     self.execution_ctx._run_cell(code)
 
             except Exception as e:

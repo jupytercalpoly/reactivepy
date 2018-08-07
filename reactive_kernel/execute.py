@@ -26,8 +26,6 @@ class ExecutionContext:
         if not nodelist:
             return
 
-        old_displayhook = sys.displayhook
-        sys.displayhook = lambda x: print(repr(x))
         if isinstance(nodelist[-1], _assign_nodes):
             asg = nodelist[-1]
             if isinstance(asg, ast.Assign) and len(asg.targets) == 1:
@@ -60,7 +58,6 @@ class ExecutionContext:
         except BaseException:
             return True
 
-        sys.displayhook = old_displayhook
         return False
 
     def run_code(self, code_obj):
