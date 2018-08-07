@@ -288,7 +288,10 @@ class DependencyTracker:
         if output_vars not in self._nodes:
             raise CodeObjectNotFoundException()
 
-        return list(self._get_descendants(output_vars))
+        unique_descendants = set(self._get_descendants(output_vars))
+
+        return sorted(unique_descendants,
+                      key=lambda node: self._ordering[node.output_vars])[1:]
 
     def _get_descendants(self, output_vars):
         yield self._nodes[output_vars]
