@@ -26,18 +26,13 @@ class CapturedDisplayHook(object):
         sys.stdout.write("\n")
         builtins._ = value
 
-    @property
-    def outputs(self):
-        return [repr(kargs) for kargs in self._outputs]
 
-
-class CaptureDisplay(object):
+class CapturedDisplayCtx(object):
     def __init__(self, log_func=None, displayhook=True):
         self.displayhook = displayhook
         self.log = log_func
 
     def __enter__(self):
-        # self.log('Entering capture context')
         self.displayhook = sys.displayhook
 
         displayhook = None
@@ -50,4 +45,3 @@ class CaptureDisplay(object):
 
     def __exit__(self, exc_type, exc_value, traceback):
         sys.displayhook = self.displayhook
-        #self.log('Exiting capture context')
