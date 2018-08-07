@@ -4,6 +4,7 @@ from .codeObject import CodeObject
 from .execute import ExecutionContext
 from .capturedObject import CaptureObject
 import traceback as tb
+from .capturedDisplay import CaptureDisplay
 __version__ = '0.1.0'
 
 
@@ -32,7 +33,7 @@ class ReactivePythonKernel(Kernel):
 
         if not silent:
             try:
-                with CaptureObject(log_func=self._log) as s:
+                with CaptureObject(log_func=self._log) as s, CaptureDisplay(log_func=self.log) as a:
                     self.innerKernel._run_cell(code)
                     self._log(s.stdout)
 
@@ -59,4 +60,4 @@ class ReactivePythonKernel(Kernel):
 
     def _log(self, value):
         self.send_response(self.iopub_socket, 'stream', {
-            'name': 'stderr', 'text': value + "\n"})
+            'name': 'stdout', 'text': value + "\n"})
