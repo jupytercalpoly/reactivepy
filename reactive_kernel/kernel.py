@@ -2,7 +2,7 @@ from ipykernel.kernelbase import Kernel
 import sys
 from .codeObject import CodeObject
 from .execute import ExecutionContext
-from .capturedObject import CaptureObject
+from .captured_io import CapturedIOCtx
 import traceback as tb
 __version__ = '0.1.0'
 
@@ -19,22 +19,17 @@ class ReactivePythonKernel(Kernel):
     }
     banner = ''
 
-    # Creating a kernel of class ExecuteKernel
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.innerKernel = ExecutionContext(log_func=self._log)
+        self.execution_ctx = ExecutionContext()
 
     def do_execute(self, code, silent, store_history=True, user_expressions=None,
                    allow_stdin=False):
 
-        self.silent = silent
-
         if not silent:
             try:
-                with CaptureObject(log_func=self._log) as s:
-                    self.innerKernel._run_cell(code)
-                    self._log(s.stdout)
+                with CapturedIOCtx() as captured_io:
+                    self.execution_ctx._run_cell(code)
 
             except Exception as e:
                 formatted_lines = tb.format_exc().splitlines()
@@ -50,13 +45,18 @@ class ReactivePythonKernel(Kernel):
                 error_content['status'] = 'error'
                 return error_content
 
-        return {'status': 'ok',
-                # The base class increments the execution count
-                'execution_count': self.execution_count,
-                'payload': {},
-                'user_expressions': [],
-                }
+            if not silent:
+                if len(captured_io.stdout) > 0:
+                    self.send_response(
+                        self.iopub_socket, 'stream', {
+                            'name': 'stdout', 'text': captured_io.stdout})
 
-    def _log(self, value):
-        self.send_response(self.iopub_socket, 'stream', {
-            'name': 'stderr', 'text': value + "\n"})
+                if len(captured_io.stderr) > 0:
+                    self.send_response(
+                        self.iopub_socket, 'stream', {
+                            'name': 'stderr', 'text': captured_io.stderr})
+
+        return {
+            'status': 'ok',
+            'execution_count': self.execution_count,
+        }
