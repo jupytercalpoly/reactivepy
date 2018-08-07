@@ -4,10 +4,6 @@ import builtins
 
 
 class CapturedDisplayHook(object):
-    def __init__(self, displayhook, outputs, log_func=None):
-        self._outputs = outputs
-        self.log = log_func
-
     def __call__(self, value=None):
         if value is None:
             return
@@ -28,20 +24,12 @@ class CapturedDisplayHook(object):
 
 
 class CapturedDisplayCtx(object):
-    def __init__(self, log_func=None, displayhook=True):
-        self.displayhook = displayhook
-        self.log = log_func
-
     def __enter__(self):
-        self.displayhook = sys.displayhook
+        self.sys_displayhook = sys.displayhook
 
-        displayhook = None
-        outputs = []
-        if self.displayhook:
-            displayhook = sys.displayhook = CapturedDisplayHook(
-                displayhook, outputs, self.log)
+        displayhook = sys.displayhook = CapturedDisplayHook()
 
         return displayhook
 
     def __exit__(self, exc_type, exc_value, traceback):
-        sys.displayhook = self.displayhook
+        sys.displayhook = self.sys_displayhook

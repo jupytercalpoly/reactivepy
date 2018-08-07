@@ -29,7 +29,7 @@ class ReactivePythonKernel(Kernel):
 
         if not silent:
             try:
-                with CapturedIOCtx() as captured_io, CapturedDisplayCtx(log_func=self.log) as a:
+                with CapturedIOCtx() as captured_io, CapturedDisplayCtx() as a:
                     self.execution_ctx._run_cell(code)
 
             except Exception as e:
