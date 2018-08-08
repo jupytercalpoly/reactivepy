@@ -1,6 +1,9 @@
 from ipykernel.kernelbase import Kernel
 import sys
 from .code_object import CodeObject
+from .execute import ExecutionContext
+from .captured_io import CapturedIOCtx
+from .captured_display import CapturedDisplayCtx
 from .dependencies import DependencyTracker
 import traceback as tb
 
@@ -21,18 +24,27 @@ class ReactivePythonKernel(Kernel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.execution_ctx = ExecutionContext()
 
         self.dep_tracker = DependencyTracker()
 
     def do_execute(self, code, silent, store_history=True, user_expressions=None,
                    allow_stdin=False):
         try:
-            code_obj = CodeObject(code)
+            with CapturedIOCtx() as captured_io, CapturedDisplayCtx() as a:
+                code_obj = CodeObject(code)
 
-            if code_obj in self.dep_tracker:
-                self._update_code_object(code_obj)
-            else:
-                self._register_new_code_object(code_obj)
+                if code_obj in self.dep_tracker:
+                    self._update_code_object(code_obj)
+                else:
+                    self._register_new_code_object(code_obj)
+
+                self.execution_ctx._run_cell(code)
+
+            descendants = self.dep_tracker.get_descendants(code_obj)
+
+            for desc in descendants:
+                self.execution_ctx._run_cell(desc.code)
 
         except Exception as e:
             formatted_lines = tb.format_exc().splitlines()
@@ -43,21 +55,25 @@ class ReactivePythonKernel(Kernel):
                     'evalue': str(e),
                     'traceback': formatted_lines}
             if not silent:
-                self.send_response(self.iopub_socket, 'error', error_content)
+                self.send_response(self.iopub_socket,
+                                   'error', error_content)
             error_content['status'] = 'error'
+
             return error_content
 
         if not silent:
-            stream_content = {
-                'name': 'stdout', 'text': str(
-                    self.dep_tracker.order_nodes())}
-            self.send_response(self.iopub_socket, 'stream', stream_content)
+            if len(captured_io.stdout) > 0:
+                self.send_response(
+                    self.iopub_socket, 'stream', {
+                        'name': 'stdout', 'text': captured_io.stdout})
+
+            if len(captured_io.stderr) > 0:
+                self.send_response(
+                    self.iopub_socket, 'stream', {
+                        'name': 'stderr', 'text': captured_io.stderr})
 
         return {'status': 'ok',
-                # The base class increments the execution count
                 'execution_count': self.execution_count,
-                'payload': [],
-                'user_expressions': {},
                 }
 
     def _update_code_object(self, new_code_obj):

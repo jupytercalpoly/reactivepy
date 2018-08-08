@@ -1,4 +1,5 @@
 from symtable import symtable, Symbol
+import builtins as builtins_mod
 
 
 class CodeObject:
@@ -13,7 +14,7 @@ class CodeObject:
 
     def _find_symbol_tables(self, symbols):
         for sym in symbols.get_symbols():
-            if sym.is_global():
+            if sym.is_global() and not hasattr(builtins_mod, sym.get_name()):
                 yield SymbolWrapper(sym)
 
         for a in symbols.get_children():
@@ -31,11 +32,11 @@ class CodeObject:
             return frozenset(output_vars)
 
     def __hash__(self):
-        return hash(self.input_vars)
+        return hash(self.output_vars)
 
     def __eq__(self, other):
         if isinstance(other, CodeObject):
-            return self.input_vars == other.input_vars
+            return self.output_vars == other.output_vars
         return False
 
     def __repr__(self):
