@@ -16,13 +16,13 @@ class ExecutionContext:
         self.log = log_func
         self.excepthook = sys.excepthook
 
-    def _run_cell(self, code):
+    def run_cell(self, code):
         code_ast = ast.parse(code)
-        result = self.run_ast_nodes(code_ast.body)
+        result = self._run_ast_nodes(code_ast.body)
 
         return result
 
-    def run_ast_nodes(self, nodelist):
+    def _run_ast_nodes(self, nodelist):
         if not nodelist:
             return
 
@@ -47,20 +47,20 @@ class ExecutionContext:
         try:
             mod = ast.Module(to_run_exec)
             code = compile(mod, "<ast-parse>", "exec")
-            if self.run_code(code):
+            if self._run_code(code):
                 return True
 
             for i, node in enumerate(to_run_interactive):
                 mod = ast.Interactive([node])
                 code = compile(mod, "<ast-parse>", "single")
-                if self.run_code(code):
+                if self._run_code(code):
                     return True
         except BaseException:
             return True
 
         return False
 
-    def run_code(self, code_obj):
+    def _run_code(self, code_obj):
         old_excepthook, sys.excepthook = sys.excepthook, self.excepthook
         outflag = True  # happens in more places, so it's easier as default
         try:
