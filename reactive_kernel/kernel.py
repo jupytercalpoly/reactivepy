@@ -212,13 +212,19 @@ class ReactivePythonKernel(MetadataBaseKernel):
                     self._execution_ctx.run_cell(exec_unit.code_obj.code)
 
                 if not silent:
+                    # 6b. Determine whether the current execution unit will be
+                    # directly display or update
                     message_mode = 'update_display_data' if exec_unit != current_exec_unit else 'display_data'
+
+                    # 6c. Create rich outputs for captured output
                     if len(captured_output.values) > 0:
                         data, md = self.formatter.format(
                             captured_output.values[0])
                     else:
                         data, md = {}, {}
 
+                    # 6d. For the captured output value, stdout, and stderr
+                    # send appropriate responses back to the front-end
                     if len(captured_io.stdout) > 0:
                         self.send_response(
                             self.iopub_socket, message_mode, {

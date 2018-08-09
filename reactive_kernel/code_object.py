@@ -36,9 +36,11 @@ class CodeObject:
         # return one top level defined variable, only including support for one
         # as of now
         output_vars = [SymbolWrapper(sym) for sym in self.symbol_table.get_symbols()
-                       if sym.is_assigned()]
+                       if sym.is_assigned() or sym.is_imported()]
 
-        if len(output_vars) > 1:
+        num_imports = sum(map(lambda sym: int(sym.is_imported()), output_vars))
+
+        if (len(output_vars) - num_imports) > 1:
             raise MultipleDefinitionsError()
         else:
             return frozenset(output_vars)
