@@ -1,8 +1,8 @@
 from collections import defaultdict
-from .code_object import CodeObject
+from .code_object import CodeObject, SymbolWrapper
+from .transactional import TransactionDict, TransactionSet
 import sys
-from collections import UserDict
-import copy
+from typing import TypeVar, Set, Generic, FrozenSet, List
 
 
 class DuplicateCodeObjectAddedException(Exception):
@@ -36,84 +36,10 @@ class CyclicDependencyIntroducedException(Exception):
     pass
 
 
-class CommitNeverStartedException(Exception):
-    """Commit was never started"""
-    pass
+NodeT = TypeVar('NodeType')
 
 
-class TransactionDict(UserDict):
-    _tombstone = object()
-
-    def __init__(self, *args, **kwargs):
-        super(TransactionDict, self).__init__(*args, **kwargs)
-
-        self._dirty_values = dict()
-        self._started_commit = False
-
-    def __getitem__(self, key):
-        if key in self._dirty_values:
-            return self._dirty_values[key]
-
-        if key in self.data:
-            if self._started_commit:
-                self._dirty_values[key] = copy.copy(self.data[key])
-                return self._dirty_values[key]
-            else:
-                return self.data[key]
-
-        raise KeyError(key)
-
-    def __setitem__(self, key, item):
-        if self._started_commit:
-            self._dirty_values[key] = item
-        else:
-            self.data[key] = item
-
-    def __contains__(self, key):
-        return key in self._dirty_values or key in self.data
-
-    def __delitem__(self, key):
-        if self._started_commit:
-            self._dirty_values[key] = TransactionDict._tombstone
-        else:
-            del self.data[key]
-
-    def __iter__(self):
-        return iter(set(self.data.keys()) | set(self._dirty_values.keys()))
-
-    def __len__(self):
-        return len(set(self._dirty_values.keys()) |
-                   set(self._dirty_values.keys()))
-
-    def __repr__(self):
-        temp_dict = dict()
-
-        temp_dict.update(self.data)
-        temp_dict.update(self._dirty_values)
-
-        return repr(temp_dict)
-
-    def start_transaction(self):
-        self._started_commit = True
-
-    def commit(self):
-        if not self._started_commit:
-            raise CommitNeverStartedException()
-        for key in self._dirty_values:
-            if self._dirty_values[key] == TransactionDict._tombstone:
-                del self.data[key]
-            else:
-                self.data[key] = self._dirty_values[key]
-
-        self._dirty_values.clear()
-        self._started_commit = False
-
-    def rollback(self):
-        self._dirty_values.clear()
-        self._started_commit = False
-
-
-class DependencyTracker:
+class DependencyTracker(Generic[NodeT]):
     """Track dependencies between code objects and maintain a topological ordering of nodes
 
     Uses an incremental topological ordering algorithm to detect cycles and maintain order.
@@ -124,14 +50,14 @@ class DependencyTracker:
 
     def __init__(self):
         # exported variable(s) -> integer value denoting topological ordering
-        self._ordering = TransactionDict()
-        # exported variable(s) -> code object node
-        self._nodes = TransactionDict()
+        self._ordering = TransactionDict[NodeT, int]()
+        # exported variable(s)
+        self._nodes = TransactionSet[NodeT]()
         # exported variable(s) -> set of descendent variable(s)
-        self._edges = TransactionDict()
-        self._backward_edges = TransactionDict()
-        # variable -> code object that defines it
-        self._symbol_definitions = TransactionDict()
+        self._edges = TransactionDict[NodeT,
+                                      Set[NodeT]]()
+        self._backward_edges = TransactionDict[NodeT, Set[NodeT]](
+        )
 
     def start_transaction(self):
         self._ordering.start_transaction()
@@ -151,39 +77,27 @@ class DependencyTracker:
         self._edges.rollback()
         self._backward_edges.rollback()
 
-    def add_node(self, code):
+    def add_node(self, defined_vars: NodeT):
         """"Add a new code object to the dependency graph
 
         Initially this object has no dependencies
         """
-        output_vars = code.output_vars
-        if output_vars in self._nodes:
+        if defined_vars in self._nodes:
             raise DuplicateCodeObjectAddedException()
 
-        self._nodes[output_vars] = code
-        for sym in code.output_vars:
-            self._symbol_definitions[sym] = code
-        self._edges[output_vars] = set()  # No edges initially
-        self._backward_edges[output_vars] = set()
+        self._nodes.add(defined_vars)
+        self._edges[defined_vars] = set()  # No edges initially
+        self._backward_edges[defined_vars] = set()
 
         max_order_value = max(self._ordering.values(), default=0)
-        self._ordering[output_vars] = max_order_value + 1
+        self._ordering[defined_vars] = max_order_value + 1
 
-    def replace_node(self, code):
-        """Replace node with the same output variables with a new node"""
-        output_vars = code.output_vars
-        if output_vars not in self._nodes:
-            raise CodeObjectNotFoundException()
-
-        self._nodes[output_vars] = code
-
-    def add_edge(self, from_code, to_code):
+    def add_edge(self, from_output_vars: NodeT,
+                 to_output_vars: NodeT) -> bool:
         """Add new edge to dependency graph
 
         Return boolean, False if edge already existed, True if edge was successfully added
         """
-        from_output_vars = from_code.output_vars
-        to_output_vars = to_code.output_vars
 
         if from_output_vars not in self._nodes or to_output_vars not in self._nodes:
             raise CodeObjectNotFoundException()
@@ -258,10 +172,8 @@ class DependencyTracker:
         for (node, order_value) in zip(L, R):
             self._ordering[node] = order_value
 
-    def delete_edge(self, from_code, to_code):
-        from_output_vars = from_code.output_vars
-        to_output_vars = to_code.output_vars
-
+    def delete_edge(self, from_output_vars: NodeT,
+                    to_output_vars: NodeT):
         if from_output_vars not in self._nodes or to_output_vars not in self._nodes:
             raise CodeObjectNotFoundException()
 
@@ -271,44 +183,29 @@ class DependencyTracker:
         self._edges[from_output_vars].remove(to_output_vars)
         self._backward_edges[to_output_vars].remove(from_output_vars)
 
-    def get_children(self, node):
-        """Get directly dependent objects for given object"""
-        output_vars = node.output_vars
-
-        if output_vars not in self._nodes:
-            raise CodeObjectNotFoundException()
-
-        return list(
-            map(lambda child: self._nodes[child], self._edges[output_vars]))
-
-    def get_descendants(self, node):
+    def get_descendants(
+            self, defined_vars: NodeT) -> List[NodeT]:
         """Get all code objects that transitively depend on the given object"""
-        output_vars = node.output_vars
 
-        if output_vars not in self._nodes:
+        if defined_vars not in self._nodes:
             raise CodeObjectNotFoundException()
 
-        unique_descendants = set(self._get_descendants(output_vars))
+        unique_descendants = set(
+            self._get_descendants(defined_vars)) - {defined_vars}
 
         return sorted(unique_descendants,
-                      key=lambda node: self._ordering[node.output_vars])[1:]
+                      key=lambda node: self._ordering[node])
 
     def _get_descendants(self, output_vars):
-        yield self._nodes[output_vars]
+        yield output_vars
 
         for descendent in self._edges[output_vars]:
             yield from self._get_descendants(descendent)
 
-    def __contains__(self, code):
+    def __contains__(self, defined_vars: NodeT) -> bool:
         """Test whether code object is already present in dependency tracker"""
-        return code.output_vars in self._nodes
+        return defined_vars in self._nodes
 
-    def __getitem__(self, code):
-        return self._nodes[code.output_vars]
-
-    def order_nodes(self, reverse=False):
-        return sorted(self._nodes.values(),
+    def order_nodes(self, reverse=False) -> List[NodeT]:
+        return sorted(self._nodes,
                       key=lambda node: self._ordering[node.output_vars], reverse=reverse)
-
-    def get_code_defining_symbol(self, symbol):
-        return self._symbol_definitions[symbol]
