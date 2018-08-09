@@ -10,8 +10,9 @@ class CapturedDisplayHook(object):
     def __call__(self, value=None):
         if value is None:
             return
-        self.values.append(value)
+
         builtins_mod._ = value
+        self.values.append(value)
 
 
 class CapturedDisplayCtx(object):

@@ -110,6 +110,9 @@ setup(name='reactive-kernel',
       requires=[
           'jupyter_client', 'IPython', 'ipykernel'
       ],
+      install_requires=[
+          'jupyter_client', 'IPython', 'ipykernel'
+      ],
       classifiers=[
           'Intended Audience :: Developers',
           'License :: OSI Approved :: BSD License',
