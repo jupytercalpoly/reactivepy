@@ -209,7 +209,8 @@ class ReactivePythonKernel(MetadataBaseKernel):
                 # 6a. Run the code and capture everything written to stdout,
                 # stderr, and the displayhook
                 with CapturedIOCtx() as captured_io, CapturedDisplayCtx() as captured_output:
-                    self._execution_ctx.run_cell(exec_unit.code_obj.code)
+                    self._execution_ctx.run_cell(
+                        exec_unit.code_obj.code, exec_unit.display_id)
 
                 if not silent:
                     # 6b. Determine whether the current execution unit will be
