@@ -1,13 +1,25 @@
 from symtable import symtable, Symbol
 import builtins as builtins_mod
+from typing import List, FrozenSet
+import random
+import string
+
+
+def generate_id(size=24, chars=(string.ascii_letters + string.digits)):
+    return ''.join(random.choice(chars) for _ in range(size))
 
 
 class CodeObject:
-    def __init__(self, code):
-        self.symbol_table = symtable(code, '<string>', 'exec')
-        self.code = code
-        self.input_vars = self._find_input_variables()
-        self.output_vars = self._find_output_variables()
+    def __init__(self, code: str):
+        self.symbol_table: symtable = symtable(code, '<string>', 'exec')
+        self.code: str = code
+        self.input_vars: List[SymbolWrapper] = self._find_input_variables()
+        self.output_vars: FrozenSet[SymbolWrapper] = self._find_output_variables(
+        )
+        if len(self.output_vars) > 0:
+            self.display_id = "+".join(map(str, self.output_vars))
+        else:
+            self.display_id = generate_id()
 
     def _find_input_variables(self):
         return list(self._find_symbol_tables(self.symbol_table))
@@ -32,11 +44,11 @@ class CodeObject:
             return frozenset(output_vars)
 
     def __hash__(self):
-        return hash(self.output_vars)
+        return hash(self.display_id)
 
     def __eq__(self, other):
         if isinstance(other, CodeObject):
-            return self.output_vars == other.output_vars
+            return self.display_id == other.display_id
         return False
 
     def __repr__(self):
@@ -46,8 +58,8 @@ class CodeObject:
 class SymbolWrapper:
     """Wrapper for symtable Symbols that performs hashing and equality check by name"""
 
-    def __init__(self, symbol):
-        self._symbol = symbol
+    def __init__(self, symbol: Symbol):
+        self._symbol: Symbol = symbol
 
     def __getattr__(self, attr):
         return self._symbol.__getattribute__(attr)
