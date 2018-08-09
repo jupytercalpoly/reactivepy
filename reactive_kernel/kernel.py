@@ -7,6 +7,7 @@ from .captured_display import CapturedDisplayCtx
 from .dependencies import DependencyTracker
 import traceback as tb
 from typing import Union, Any, Dict, FrozenSet
+from IPython.core.formatters import DisplayFormatter
 
 __version__ = '0.1.0'
 
@@ -103,6 +104,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
         self._cell_id_to_exec_unit: Dict[str, ExecutionUnitInfo] = dict()
         self._symbol_to_exec_unit: Dict[SymbolWrapper,
                                         ExecutionUnitInfo] = dict()
+        self.formatter = DisplayFormatter()
 
     def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
                    allow_stdin=False):
@@ -211,6 +213,12 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
                 if not silent:
                     message_mode = 'update_display_data' if exec_unit != current_exec_unit else 'display_data'
+                    if len(captured_output.values) > 0:
+                        data, md = self.formatter.format(
+                            captured_output.values[0])
+                    else:
+                        data, md = {}, {}
+
                     if len(captured_io.stdout) > 0:
                         self.send_response(
                             self.iopub_socket, message_mode, {
@@ -225,10 +233,8 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
                     if len(captured_output.values) > 0:
                         self.send_response(self.iopub_socket, message_mode, {
-                            'data': {
-                                'text/plain': str(captured_output.values[0])
-                            },
-                            'metadata': {},
+                            'data': data,
+                            'metadata': md,
                             'transient': {
                                 'display_id': exec_unit.display_id
                             }

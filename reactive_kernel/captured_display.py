@@ -1,6 +1,6 @@
 import io
 import sys
-import builtins
+import builtins as builtins_mod
 
 
 class CapturedDisplayHook(object):
@@ -11,7 +11,7 @@ class CapturedDisplayHook(object):
         if value is None:
             return
 
-        builtins._ = value
+        builtins_mod._ = value
         self.values.append(value)
 
 
