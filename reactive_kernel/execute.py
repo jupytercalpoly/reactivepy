@@ -8,9 +8,9 @@ from typing import List as ListType
 import traceback
 from IPython.core.ultratb import ListTB
 import IPython.core.ultratb as ultratb
-# from IPython.core.compilerop import CachingCompiler, check_linecache_ipython
 import linecache
 import time
+from tornado.ioloop import IOLoop
 
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)
@@ -18,9 +18,11 @@ _single_targets_nodes = (ast.AugAssign, ast.AnnAssign)
 
 
 class ExecutionContext:
-    def __init__(self, log_func=None):
+    def __init__(self, eventloop=None):
         self.namespace = {}
-        self.log = log_func
+        if eventloop is None:
+            eventloop = IOLoop.current()
+        self.eventloop = eventloop
         self.excepthook = sys.excepthook
         self.InteractiveTB = ultratb.AutoFormattedTB(mode='Plain',
                                                      color_scheme='LightBG',
@@ -50,7 +52,7 @@ class ExecutionContext:
 
     def run_cell(self, code, name):
         entry = (len(code), time.time(),
-                 [line+'\n' for line in code.splitlines()], name)
+                 [line + '\n' for line in code.splitlines()], name)
         linecache.cache[name] = entry
         self.cache[name] = entry
         code_ast = ast.parse(code, filename=name, mode='exec')
@@ -86,7 +88,7 @@ class ExecutionContext:
             if self._run_code(code):
                 return True
 
-            for i, node in enumerate(to_run_interactive):
+            for node in to_run_interactive:
                 mod = ast.Interactive([node])
                 code = compile(mod, name, 'single')
                 if self._run_code(code):
@@ -113,7 +115,8 @@ class ExecutionContext:
                 )
 
                 if issubclass(etype, SyntaxError):
-                    # If the error occurred when executing compiled code, we should provide full stacktrace
+                    # If the error occurred when executing compiled code, we
+                    # should provide full stacktrace
                     elist = traceback.extract_tb(tb)
                     stb = self.SyntaxTB.structured_traceback(
                         etype, value, elist)

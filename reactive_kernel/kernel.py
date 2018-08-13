@@ -10,6 +10,7 @@ from typing import Union, Any, Dict, FrozenSet
 from IPython.core.formatters import DisplayFormatter
 import IPython.core.ultratb as ultratb
 
+
 __version__ = '0.1.0'
 
 
@@ -36,9 +37,7 @@ class MetadataBaseKernel(Kernel):
 
 
 class ExecutionUnitInfo:
-    """ Container of all relevant information needed to update, execute, and display any code sent
-
-    """
+    """ Container of all relevant information needed to update, execute, and display any code sent"""
 
     def __init__(self, code_obj: CodeObject,
                  pinning_cell: Union[None, str]=None):
@@ -46,7 +45,6 @@ class ExecutionUnitInfo:
         self.display_id: str = code_obj.display_id
         self.stdout_display_id: str = 'stdout-' + code_obj.display_id
         self.pinning_cell: Union[None, str] = pinning_cell
-        self.has_run_before = False
 
     @property
     def is_pinned(self):
@@ -59,7 +57,7 @@ class ExecutionUnitInfo:
 
     def pin(self, cell_id: str):
         if self.is_pinned:
-            raise RePinningExecutionUnitException
+            raise RedefiningOwnedCellException
         else:
             self.pinning_cell = cell_id
 
@@ -67,18 +65,10 @@ class ExecutionUnitInfo:
         self.pinning_cell = None
 
 
-class RePinningExecutionUnitException(Exception):
-    """Execution unit is already tied to a single existing cell
-
-    An already pinned (owned) execution unit may only have a single owning cell
-    """
-    pass
-
-
 class RedefiningOwnedCellException(Exception):
     """Code object is already tied to a different, existing cell
 
-    Execution units (code objects) may only be tied (owned/pinned) to a single cell at a time.
+    Execution units (code objects) may only be owned by a single cell at a time.
 
     The prior defining cell must be deleted before it can be redefined in a different cell
     """
@@ -90,15 +80,15 @@ class ReactivePythonKernel(MetadataBaseKernel):
     language_info = {
         'name': 'python',
         'version': sys.version.split()[0],
-        'mimetype': 'text/x-python',
         'nbconvert_exporter': 'python',
+        'mimetype': 'text/x-python',
         'file_extension': '.py'
     }
     banner = ''
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._execution_ctx = ExecutionContext()
+        self._execution_ctx = ExecutionContext(eventloop=self.eventloop)
         self._dep_tracker = DependencyTracker()
         self._execution_units: Dict[FrozenSet[SymbolWrapper],
                                     ExecutionUnitInfo] = dict()
@@ -193,12 +183,9 @@ class ReactivePythonKernel(MetadataBaseKernel):
                 # defining variables (all the variables that were defined in
                 # the same code block), and create a dependency to them
                 for sym in code_obj.input_vars:
-                    try:
-                        code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
-                        self._dep_tracker.add_edge(
-                            code_object_id, code_obj.display_id)
-                    except Exception as e:
-                        print(e, file=sys.stderr)
+                    code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
+                    self._dep_tracker.add_edge(
+                        code_object_id, code_obj.display_id)
 
                 self._dep_tracker.commit()
 
