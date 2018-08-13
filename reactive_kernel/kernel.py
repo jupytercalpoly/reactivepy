@@ -8,6 +8,7 @@ from .dependencies import DependencyTracker
 import traceback as tb
 from typing import Union, Any, Dict, FrozenSet
 from IPython.core.formatters import DisplayFormatter
+import IPython.core.ultratb as ultratb
 
 __version__ = '0.1.0'
 
@@ -105,6 +106,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
         self._symbol_to_exec_unit: Dict[SymbolWrapper,
                                         ExecutionUnitInfo] = dict()
         self.formatter = DisplayFormatter()
+        self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
 
     def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
                    allow_stdin=False):
@@ -191,9 +193,12 @@ class ReactivePythonKernel(MetadataBaseKernel):
                 # defining variables (all the variables that were defined in
                 # the same code block), and create a dependency to them
                 for sym in code_obj.input_vars:
-                    code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
-                    self._dep_tracker.add_edge(
-                        code_object_id, code_obj.display_id)
+                    try:
+                        code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
+                        self._dep_tracker.add_edge(
+                            code_object_id, code_obj.display_id)
+                    except Exception as e:
+                        print(e, file=sys.stderr)
 
                 self._dep_tracker.commit()
 
