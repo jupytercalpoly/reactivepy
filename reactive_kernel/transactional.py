@@ -38,7 +38,9 @@ class TransactionDict(TransactionalABC, UserDict, Dict[KT, VT]):
 
     def __getitem__(self, key: KT) -> VT:
         if key in self._dirty_values:
-            return self._dirty_values[key]
+            data = self._dirty_values[key]
+            if data != TransactionDict._tombstone:
+                return data
 
         if key in self.data:
             if self._started_commit:

@@ -75,7 +75,7 @@ class SymbolWrapper:
         return hash(self._symbol.get_name())
 
     def __repr__(self):
-        return f'<{self._symbol.get_name()}>'
+        return f'[{self._symbol.get_name()}]'
 
 
 class MultipleDefinitionsError(Exception):

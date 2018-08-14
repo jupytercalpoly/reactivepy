@@ -11,50 +11,39 @@ import IPython.core.ultratb as ultratb
 import linecache
 import time
 from tornado.ioloop import IOLoop
-
+from importlib.abc import InspectLoader
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)
 _single_targets_nodes = (ast.AugAssign, ast.AnnAssign)
 
 
+class LineCachingFailedException(Exception):
+    """Caching the provided code in the global line cache failed"""
+    pass
+
+
 class ExecutionContext:
-    def __init__(self, eventloop=None):
-        self.namespace = {}
-        if eventloop is None:
-            eventloop = IOLoop.current()
-        self.eventloop = eventloop
+    def __init__(self, loader: InspectLoader, loop=None):
+        self.user_ns = {}
+        self.global_ns = {}
+        if loop is None:
+            loop = IOLoop.current()
+        self.loop = loop
+        self.loader = loader
         self.excepthook = sys.excepthook
         self.InteractiveTB = ultratb.AutoFormattedTB(mode='Plain',
                                                      color_scheme='LightBG',
                                                      tb_offset=1,
-                                                     check_cache=self.check_internal_cache,
                                                      debugger_cls=None)
         self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
-        self.cache = {}
-        self.saved_getline = linecache.getline
-        self.saved_getlines = linecache.getlines
-
-        def wrapped_getline(*args, **kwargs):
-            result = self.saved_getline(*args, **kwargs)
-            if result is None or len(result) == 0:
-                filename, lineno = args
-                return self.cache[filename][2][lineno - 1]
-            return result
-
-        def wrapped_getlines(*args, **kwargs):
-            result = self.saved_getlines(*args, **kwargs)
-            if result is None or len(result) == 0:
-                return self.cache[args[0]][2]
-            return result
-
-        linecache.getline = wrapped_getline
-        linecache.getlines = wrapped_getlines
 
     def run_cell(self, code, name):
-        entry = (len(code), time.time(),
-                 [line + '\n' for line in code.splitlines()], name)
-        linecache.cache[name] = entry
-        self.cache[name] = entry
+        result = linecache.lazycache(
+            name, {
+                '__name__': name, '__loader__': self.loader})
+        if not result:
+            raise LineCachingFailedException()
+
         code_ast = ast.parse(code, filename=name, mode='exec')
         result = self._run_ast_nodes(code_ast.body, name)
 
@@ -103,7 +92,7 @@ class ExecutionContext:
         outflag = True  # happens in more places, so it's easier as default
         try:
             try:
-                exec(code_obj, globals(), self.namespace)
+                exec(code_obj, self.global_ns, self.user_ns)
             finally:
                 # Reset our crash handler in place
                 sys.excepthook = old_excepthook
@@ -122,18 +111,12 @@ class ExecutionContext:
                         etype, value, elist)
                     print(self.InteractiveTB.stb2text(stb), file=sys.stderr)
                 else:
-
                     # Actually show the traceback
                     print(self.InteractiveTB.stb2text(stb), file=sys.stderr)
 
-            # traceback.print_exception(etype, value, tb)
             except BaseException as e:
                 print(e)
         else:
             outflag = False
 
         return outflag
-
-    def check_internal_cache(self, *args):
-        linecache.checkcache(*args)
-        linecache.cache.update(self.cache)
