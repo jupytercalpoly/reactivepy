@@ -5,24 +5,51 @@ from ast import parse, AugAssign, AnnAssign, Assign
 from ast import AST
 import ast
 from typing import List as ListType
+import traceback
+from IPython.core.ultratb import ListTB
+import IPython.core.ultratb as ultratb
+import linecache
+import time
+from tornado.ioloop import IOLoop
+from importlib.abc import InspectLoader
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)
 _single_targets_nodes = (ast.AugAssign, ast.AnnAssign)
 
 
-class ExecutionContext:
-    def __init__(self, log_func=None):
-        self.namespace = {}
-        self.log = log_func
-        self.excepthook = sys.excepthook
+class LineCachingFailedException(Exception):
+    """Caching the provided code in the global line cache failed"""
+    pass
 
-    def run_cell(self, code):
-        code_ast = ast.parse(code)
-        result = self._run_ast_nodes(code_ast.body)
+
+class ExecutionContext:
+    def __init__(self, loader: InspectLoader, loop=None):
+        self.user_ns = {}
+        self.global_ns = {}
+        if loop is None:
+            loop = IOLoop.current()
+        self.loop = loop
+        self.loader = loader
+        self.excepthook = sys.excepthook
+        self.InteractiveTB = ultratb.AutoFormattedTB(mode='Plain',
+                                                     color_scheme='LightBG',
+                                                     tb_offset=1,
+                                                     debugger_cls=None)
+        self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
+
+    def run_cell(self, code, name):
+        result = linecache.lazycache(
+            name, {
+                '__name__': name, '__loader__': self.loader})
+        if not result:
+            raise LineCachingFailedException()
+
+        code_ast = ast.parse(code, filename=name, mode='exec')
+        result = self._run_ast_nodes(code_ast.body, name)
 
         return result
 
-    def _run_ast_nodes(self, nodelist):
+    def _run_ast_nodes(self, nodelist, name):
         if not nodelist:
             return
 
@@ -46,13 +73,13 @@ class ExecutionContext:
 
         try:
             mod = ast.Module(to_run_exec)
-            code = compile(mod, "<ast-parse>", "exec")
+            code = compile(mod, name, 'exec')
             if self._run_code(code):
                 return True
 
-            for i, node in enumerate(to_run_interactive):
+            for node in to_run_interactive:
                 mod = ast.Interactive([node])
-                code = compile(mod, "<ast-parse>", "single")
+                code = compile(mod, name, 'single')
                 if self._run_code(code):
                     return True
         except BaseException:
@@ -65,12 +92,30 @@ class ExecutionContext:
         outflag = True  # happens in more places, so it's easier as default
         try:
             try:
-                exec(code_obj, globals(), self.namespace)
+                exec(code_obj, self.global_ns, self.user_ns)
             finally:
                 # Reset our crash handler in place
                 sys.excepthook = old_excepthook
         except BaseException:
-            pass
+            try:
+                etype, value, tb = sys.exc_info()
+                stb = self.InteractiveTB.structured_traceback(
+                    etype, value, tb
+                )
+
+                if issubclass(etype, SyntaxError):
+                    # If the error occurred when executing compiled code, we
+                    # should provide full stacktrace
+                    elist = traceback.extract_tb(tb)
+                    stb = self.SyntaxTB.structured_traceback(
+                        etype, value, elist)
+                    print(self.InteractiveTB.stb2text(stb), file=sys.stderr)
+                else:
+                    # Actually show the traceback
+                    print(self.InteractiveTB.stb2text(stb), file=sys.stderr)
+
+            except BaseException as e:
+                print(e)
         else:
             outflag = False
 
