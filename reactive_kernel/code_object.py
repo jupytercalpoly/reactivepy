@@ -36,11 +36,9 @@ class CodeObject:
         # return one top level defined variable, only including support for one
         # as of now
         output_vars = [SymbolWrapper(sym) for sym in self.symbol_table.get_symbols()
-                       if sym.is_assigned() or sym.is_imported()]
+                       if sym.is_assigned()]
 
-        num_imports = sum(map(lambda sym: int(sym.is_imported()), output_vars))
-
-        if (len(output_vars) - num_imports) > 1:
+        if len(output_vars) > 1:
             raise MultipleDefinitionsError()
         else:
             return frozenset(output_vars)
@@ -75,7 +73,7 @@ class SymbolWrapper:
         return hash(self._symbol.get_name())
 
     def __repr__(self):
-        return f'[{self._symbol.get_name()}]'
+        return f'<{self._symbol.get_name()}>'
 
 
 class MultipleDefinitionsError(Exception):
