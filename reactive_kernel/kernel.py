@@ -9,6 +9,8 @@ import traceback as tb
 from typing import Union, Any, Dict, FrozenSet
 from IPython.core.formatters import DisplayFormatter
 import IPython.core.ultratb as ultratb
+from importlib.abc import InspectLoader
+from .transactional import TransactionDict, TransactionalABC
 
 
 __version__ = '0.1.0'
@@ -64,6 +66,9 @@ class ExecutionUnitInfo:
     def unpin(self):
         self.pinning_cell = None
 
+    def __repr__(self):
+        return f"<ExecUnitInfo id='{self.display_id}' owning_cell='{self.pinning_cell}' code='{self.code_obj.code}'>"
+
 
 class RedefiningOwnedCellException(Exception):
     """Code object is already tied to a different, existing cell
@@ -72,6 +77,101 @@ class RedefiningOwnedCellException(Exception):
 
     The prior defining cell must be deleted before it can be redefined in a different cell
     """
+    pass
+
+
+class DefinitionNotFoundException(Exception):
+    """No definition was found for the given input variable
+
+    Variables must be defined in a code cell before they are used
+    """
+    pass
+
+
+class ExecUnitContainer(InspectLoader, TransactionalABC):
+
+    def __init__(self, *args, **kwargs):
+        super(ExecUnitContainer, self).__init__(*args, **kwargs)
+
+        # Maps display id to execution unit info
+        self._data = TransactionDict()
+        # Maps cell id to display id
+        self._cell_id_to_display_id = TransactionDict()
+        # Maps symbol to display id
+        self._symbol_to_display_id = TransactionDict()
+
+    def register(self, exec_unit: ExecutionUnitInfo):
+        display_id = exec_unit.code_obj.display_id
+
+        assert display_id not in self._data
+
+        # Register in main index
+        self._data[display_id] = exec_unit
+
+        if exec_unit.is_pinned:
+            self._cell_id_to_display_id[exec_unit.pinning_cell] = display_id
+
+        for symbol in exec_unit.code_obj.output_vars:
+            self._symbol_to_display_id[symbol] = display_id
+
+        return exec_unit
+
+    def contains_display_id(self, display_id: str):
+        return display_id in self._data
+
+    def get_by_display_id(self, display_id: str):
+        if display_id in self._data:
+            return self._data[display_id]
+        else:
+            return None
+
+    def get_by_symbol(self, symbol: SymbolWrapper):
+        if symbol in self._symbol_to_display_id:
+            display_id = self._symbol_to_display_id[symbol]
+            return self._data[display_id]
+        else:
+            return None
+
+    def get_by_cell_id(self, cell_id: str):
+        if cell_id in self._cell_id_to_display_id:
+            display_id = self._cell_id_to_display_id[cell_id]
+            return self._data[display_id]
+        else:
+            return None
+
+    def unpin_exec_unit(self, cell_id: str):
+        if cell_id in self._cell_id_to_display_id:
+            display_id = self._cell_id_to_display_id[cell_id]
+            exec_unit = self._data[display_id]
+
+            if exec_unit is not None:
+                exec_unit.unpin()
+
+            del self._cell_id_to_display_id[cell_id]
+            return True
+        else:
+            return False
+
+    def get_source(self, display_id: str):
+        if display_id in self._data:
+            return self._data[display_id].code_obj.code
+        else:
+            raise ImportError()
+
+    def start_transaction(self):
+        self._data.start_transaction()
+        self._cell_id_to_display_id.start_transaction()
+        self._symbol_to_display_id.start_transaction()
+
+    def commit(self):
+        self._data.commit()
+        self._cell_id_to_display_id.commit()
+        self._symbol_to_display_id.commit()
+
+    def rollback(self):
+        self._data.rollback()
+        self._cell_id_to_display_id.rollback()
+        self._symbol_to_display_id.rollback()
 
 
 class ReactivePythonKernel(MetadataBaseKernel):
@@ -88,15 +188,76 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._execution_ctx = ExecutionContext(eventloop=self.eventloop)
         self._dep_tracker = DependencyTracker()
-        self._execution_units: Dict[FrozenSet[SymbolWrapper],
-                                    ExecutionUnitInfo] = dict()
-        self._cell_id_to_exec_unit: Dict[str, ExecutionUnitInfo] = dict()
-        self._symbol_to_exec_unit: Dict[SymbolWrapper,
-                                        ExecutionUnitInfo] = dict()
+        self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
+        self._execution_ctx = ExecutionContext(
+            self._exec_unit_container, loop=self.eventloop)
         self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
+
+    def _update_existing_exec_unit(self, code_obj, cell_id):
+        # 4a. If it is a redefinition, get the old execution unit
+        current_exec_unit = self._exec_unit_container.get_by_display_id(
+            code_obj.display_id)
+
+        if current_exec_unit.is_pinned and current_exec_unit.pinning_cell != cell_id:
+            raise RedefiningOwnedCellException
+
+        old_code_obj = current_exec_unit.code_obj
+
+        new_input_vars = set(code_obj.input_vars)
+        old_input_vars = set(old_code_obj.input_vars)
+
+        # 4b. Compute the sets of edges to be added and deleted if the
+        # variable dependencies of the cell have changed
+        to_delete = old_input_vars - new_input_vars
+        to_add = new_input_vars - old_input_vars
+
+        # 4c. Actually replace old code object, delete old edges,
+        # add new edges
+        exec_unit = self._exec_unit_container.get_by_display_id(
+            code_obj.display_id)
+        exec_unit.code_obj = code_obj
+
+        for sym in to_delete:
+            code_object_id = self._exec_unit_container.get_by_symbol(
+                sym).code_obj.display_id
+            self._dep_tracker.delete_edge(
+                code_object_id, code_obj.display_id)
+
+        for sym in to_add:
+            code_object_id = self._exec_unit_container.get_by_symbol(
+                sym).code_obj.display_id
+            self._dep_tracker.add_edge(
+                code_object_id, code_obj.display_id)
+
+        # 4d. Get the updated execution unit and return it
+        return self._exec_unit_container.get_by_display_id(
+            code_obj.display_id)
+
+    def _create_new_exec_unit(self, code_obj, cell_id):
+        # 4a. Create new execution unit to hold code object + display
+        # id + cell id data
+        current_exec_unit = self._exec_unit_container.register(ExecutionUnitInfo(
+            code_obj, pinning_cell=cell_id))
+
+        # 4b. Add new node
+        self._dep_tracker.add_node(code_obj.display_id)
+
+        # 4c. For each variable it depends on, find the complete set of
+        # defining variables (all the variables that were defined in
+        # the same code block), and create a dependency to them
+        for sym in code_obj.input_vars:
+            dep = self._exec_unit_container.get_by_symbol(sym)
+
+            if dep is not None:
+                code_object_id = dep.code_obj.display_id
+                self._dep_tracker.add_edge(
+                    code_object_id, code_obj.display_id)
+            else:
+                raise DefinitionNotFoundException()
+
+        return current_exec_unit
 
     def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
                    allow_stdin=False):
@@ -116,85 +277,36 @@ class ReactivePythonKernel(MetadataBaseKernel):
             # that were previously attached to a cell
             if deleted_cell_ids is not None:
                 for cell_id in deleted_cell_ids:
-                    self._cell_id_to_exec_unit[cell_id].unpin()
+                    self._exec_unit_container.unpin_exec_unit(cell_id)
 
-            # 4. Test if the code is new or a redefinition
-            if code_obj.display_id in self._execution_units:
-                # 4a. If it is a redefinition, get the old execution unit
-                current_exec_unit = self._execution_units[code_obj.display_id]
+            self._dep_tracker.start_transaction()
+            self._exec_unit_container.start_transaction()
 
-                if current_exec_unit.is_pinned and current_exec_unit.pinning_cell != cell_id:
-                    raise RedefiningOwnedCellException
+            try:
+                # 4. Test if the code is new or a redefinition
+                if self._exec_unit_container.contains_display_id(
+                        code_obj.display_id):
+                    current_exec_unit = self._update_existing_exec_unit(
+                        code_obj, cell_id)
+                else:
+                    current_exec_unit = self._create_new_exec_unit(
+                        code_obj, cell_id)
+            except Exception as e:
+                # rollback changes made to dep graph
+                self._dep_tracker.rollback()
+                self._exec_unit_container.rollback()
 
-                old_code_obj = current_exec_unit.code_obj
-
-                new_input_vars = set(code_obj.input_vars)
-                old_input_vars = set(old_code_obj.input_vars)
-
-                # 4b. Compute the sets of edges to be added and deleted if the
-                # variable dependencies of the cell have changed
-                to_delete = old_input_vars - new_input_vars
-                to_add = new_input_vars - old_input_vars
-
-                self._dep_tracker.start_transaction()
-
-                try:
-                    # 4c. Actually replace old code object, delete old edges,
-                    # add new edges
-                    self._execution_units[code_obj.display_id].code_obj = code_obj
-
-                    for sym in to_delete:
-                        code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
-                        self._dep_tracker.delete_edge(
-                            code_object_id, code_obj.display_id)
-
-                    for sym in to_add:
-                        code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
-                        self._dep_tracker.add_edge(
-                            code_object_id, code_obj.display_id)
-
-                    self._dep_tracker.commit()
-                except Exception as e:
-                    # rollback changes made to dep graph
-                    self._dep_tracker.rollback()
-                    self._execution_units[code_obj.display_id].code_obj = old_code_obj
-
-                    raise e
+                raise e
             else:
-                # 4a. Create new execution unit to hold code object + display
-                # id + cell id data
-                current_exec_unit = self._execution_units[code_obj.display_id] = ExecutionUnitInfo(
-                    code_obj, pinning_cell=cell_id)
-
-                # 4b. If execution unit is pinned (owned) by a cell, add to
-                # auxilary index
-                if current_exec_unit.is_pinned:
-                    self._cell_id_to_exec_unit[current_exec_unit.pinning_cell] = current_exec_unit
-
-                # 4c. Add new node
-                self._dep_tracker.add_node(code_obj.display_id)
-
-                self._dep_tracker.start_transaction()
-
-                for sym in code_obj.output_vars:
-                    self._symbol_to_exec_unit[sym] = current_exec_unit
-
-                # 4d. For each variable it depends on, find the complete set of
-                # defining variables (all the variables that were defined in
-                # the same code block), and create a dependency to them
-                for sym in code_obj.input_vars:
-                    code_object_id = self._symbol_to_exec_unit[sym].code_obj.display_id
-                    self._dep_tracker.add_edge(
-                        code_object_id, code_obj.display_id)
-
                 self._dep_tracker.commit()
+                self._exec_unit_container.commit()
 
             # 5. Compute the dependant execution units which must be rerun, and
             # add the current execution unit to the front of the list
             descendants = self._dep_tracker.get_descendants(
                 code_obj.display_id)
             to_run = [current_exec_unit] + list(
-                map(lambda display_id: self._execution_units[display_id], descendants))
+                map(lambda display_id: self._exec_unit_container.get_by_display_id(display_id), descendants))
 
             # 6. For each execution unit which must be run
             for exec_unit in to_run:
