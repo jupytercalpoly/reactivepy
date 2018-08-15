@@ -11,7 +11,10 @@ from IPython.core.formatters import DisplayFormatter
 import IPython.core.ultratb as ultratb
 from importlib.abc import InspectLoader
 from .transactional import TransactionDict, TransactionalABC
-
+from tornado.ioloop import IOLoop
+import time
+from ipython_genutils import py3compat
+from ipykernel.jsonutil import json_clean
 
 __version__ = '0.1.0'
 
@@ -188,12 +191,16 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._eventloop = IOLoop.current()
         self._dep_tracker = DependencyTracker()
         self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
         self._execution_ctx = ExecutionContext(
             self._exec_unit_container, loop=self.eventloop)
-        self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
+        self.KernelTB = ultratb.AutoFormattedTB(mode='Plain',
+                                                color_scheme='LightBG',
+                                                tb_offset=1,
+                                                debugger_cls=None)
 
     def _update_existing_exec_unit(self, code_obj, cell_id):
         # 4a. If it is a redefinition, get the old execution unit
@@ -259,8 +266,151 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
         return current_exec_unit
 
-    def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
-                   allow_stdin=False):
+    # COPIED FROM IPYKERNEL/KERNELBASE.PY
+    def execute_request(self, stream, ident, parent):
+        """handle an execute_request"""
+
+        try:
+            content = parent[u'content']
+            code = py3compat.cast_unicode_py2(content[u'code'])
+            silent = content[u'silent']
+            store_history = content.get(u'store_history', not silent)
+            user_expressions = content.get('user_expressions', {})
+            allow_stdin = content.get('allow_stdin', False)
+        except BaseException:
+            self.log.error("Got bad msg: ")
+            self.log.error("%s", parent)
+            return
+
+        stop_on_error = content.get('stop_on_error', True)
+
+        metadata = self.init_metadata(parent)
+
+        # Re-broadcast our input for the benefit of listening clients, and
+        # start computing output
+        if not silent:
+            self.execution_count += 1
+            self._publish_execute_input(code, parent, self.execution_count)
+
+        async def inner_execute_callback(
+                code, silent, store_history, user_expressions, allow_stdin, parent, metadata, stop_on_error):
+            reply_content = await self.do_execute(code, silent, store_history,
+                                                  user_expressions, allow_stdin)
+
+            # Flush output before sending the reply.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            # FIXME: on rare occasions, the flush doesn't seem to make it to the
+            # clients... This seems to mitigate the problem, but we definitely need
+            # to better understand what's going on.
+            if self._execute_sleep:
+                time.sleep(self._execute_sleep)
+
+            # Send the reply.
+            reply_content = json_clean(reply_content)
+            metadata = self.finish_metadata(parent, metadata, reply_content)
+
+            reply_msg = self.session.send(stream, u'execute_reply',
+                                          reply_content, parent, metadata=metadata,
+                                          ident=ident)
+
+            self.log.debug("%s", reply_msg)
+
+            if not silent and reply_msg['content']['status'] == u'error' and stop_on_error:
+                self._abort_queues()
+
+        self._eventloop.spawn_callback(
+            inner_execute_callback,
+            code,
+            silent,
+            store_history,
+            user_expressions,
+            allow_stdin,
+            parent,
+            metadata,
+            stop_on_error)
+
+    def _update_kernel_state(self, code_obj, cell_id, deleted_cell_ids):
+        # 3. If deletedCells was passed, then unpin all execution units
+        # that were previously attached to a cell
+        if deleted_cell_ids is not None:
+            for cell_id in deleted_cell_ids:
+                self._exec_unit_container.unpin_exec_unit(cell_id)
+
+        self._dep_tracker.start_transaction()
+        self._exec_unit_container.start_transaction()
+
+        try:
+            # 4. Test if the code is new or a redefinition
+            if self._exec_unit_container.contains_display_id(
+                    code_obj.display_id):
+                current_exec_unit = self._update_existing_exec_unit(
+                    code_obj, cell_id)
+            else:
+                current_exec_unit = self._create_new_exec_unit(
+                    code_obj, cell_id)
+        except Exception as e:
+            # rollback changes made to dep graph
+            self._dep_tracker.rollback()
+            self._exec_unit_container.rollback()
+
+            raise e
+        else:
+            self._dep_tracker.commit()
+            self._exec_unit_container.commit()
+
+        # 5. Compute the dependant execution units which must be rerun, and
+        # add the current execution unit to the front of the list
+        descendants = self._dep_tracker.get_descendants(
+            code_obj.display_id)
+        to_run = [current_exec_unit] + list(
+            map(lambda display_id: self._exec_unit_container.get_by_display_id(display_id), descendants))
+
+        return to_run, current_exec_unit
+
+    def _output_exec_results(
+            self, exec_unit, current_exec_unit, captured_output, captured_io):
+        # 6b. Determine whether the current execution unit will be
+        # directly display or update
+        message_mode = 'update_display_data' if exec_unit != current_exec_unit else 'display_data'
+
+        # 6c. Create rich outputs for captured output
+        if len(captured_output.values) > 0:
+            data, md = self.formatter.format(
+                captured_output.values[0])
+        else:
+            data, md = {}, {}
+
+        # 6d. For the captured output value, stdout, and stderr
+        # send appropriate responses back to the front-end
+        if len(captured_io.stdout) > 0:
+            self.send_response(
+                self.iopub_socket, message_mode, {
+                    'data': {
+                        'text/plain': captured_io.stdout
+                    },
+                    'metadata': {},
+                    'transient': {
+                        'display_id': exec_unit.stdout_display_id
+                    }
+                })
+
+        if len(captured_output.values) > 0:
+            self.send_response(self.iopub_socket, message_mode, {
+                'data': data,
+                'metadata': md,
+                'transient': {
+                    'display_id': exec_unit.display_id
+                }
+            })
+
+        if len(captured_io.stderr) > 0:
+            self.send_response(
+                self.iopub_socket, 'stream', {
+                    'name': 'stderr', 'text': captured_io.stderr})
+
+    async def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
+                         allow_stdin=False):
         try:
             # TODO: Encapsulate the related portions of these steps into
             # functions or classes
@@ -273,40 +423,8 @@ class ReactivePythonKernel(MetadataBaseKernel):
             deleted_cell_ids = self.current_metadata[
                 'deletedCells'] if 'deletedCells' in self.current_metadata else None
 
-            # 3. If deletedCells was passed, then unpin all execution units
-            # that were previously attached to a cell
-            if deleted_cell_ids is not None:
-                for cell_id in deleted_cell_ids:
-                    self._exec_unit_container.unpin_exec_unit(cell_id)
-
-            self._dep_tracker.start_transaction()
-            self._exec_unit_container.start_transaction()
-
-            try:
-                # 4. Test if the code is new or a redefinition
-                if self._exec_unit_container.contains_display_id(
-                        code_obj.display_id):
-                    current_exec_unit = self._update_existing_exec_unit(
-                        code_obj, cell_id)
-                else:
-                    current_exec_unit = self._create_new_exec_unit(
-                        code_obj, cell_id)
-            except Exception as e:
-                # rollback changes made to dep graph
-                self._dep_tracker.rollback()
-                self._exec_unit_container.rollback()
-
-                raise e
-            else:
-                self._dep_tracker.commit()
-                self._exec_unit_container.commit()
-
-            # 5. Compute the dependant execution units which must be rerun, and
-            # add the current execution unit to the front of the list
-            descendants = self._dep_tracker.get_descendants(
-                code_obj.display_id)
-            to_run = [current_exec_unit] + list(
-                map(lambda display_id: self._exec_unit_container.get_by_display_id(display_id), descendants))
+            to_run, current_exec_unit = self._update_kernel_state(
+                code_obj, cell_id, deleted_cell_ids)
 
             # 6. For each execution unit which must be run
             for exec_unit in to_run:
@@ -317,52 +435,20 @@ class ReactivePythonKernel(MetadataBaseKernel):
                         exec_unit.code_obj.code, exec_unit.display_id)
 
                 if not silent:
-                    # 6b. Determine whether the current execution unit will be
-                    # directly display or update
-                    message_mode = 'update_display_data' if exec_unit != current_exec_unit else 'display_data'
-
-                    # 6c. Create rich outputs for captured output
-                    if len(captured_output.values) > 0:
-                        data, md = self.formatter.format(
-                            captured_output.values[0])
-                    else:
-                        data, md = {}, {}
-
-                    # 6d. For the captured output value, stdout, and stderr
-                    # send appropriate responses back to the front-end
-                    if len(captured_io.stdout) > 0:
-                        self.send_response(
-                            self.iopub_socket, message_mode, {
-                                'data': {
-                                    'text/plain': captured_io.stdout
-                                },
-                                'metadata': {},
-                                'transient': {
-                                    'display_id': exec_unit.stdout_display_id
-                                }
-                            })
-
-                    if len(captured_output.values) > 0:
-                        self.send_response(self.iopub_socket, message_mode, {
-                            'data': data,
-                            'metadata': md,
-                            'transient': {
-                                'display_id': exec_unit.display_id
-                            }
-                        })
-
-                    if len(captured_io.stderr) > 0:
-                        self.send_response(
-                            self.iopub_socket, 'stream', {
-                                'name': 'stderr', 'text': captured_io.stderr})
+                    self._output_exec_results(
+                        exec_unit, current_exec_unit, captured_output, captured_io)
 
         except Exception as e:
-            formatted_lines = tb.format_exc().splitlines()
+            etype, value, tb = sys.exc_info()
+            stb = self.KernelTB.structured_traceback(
+                etype, value, tb
+            )
+            formatted_lines = self.KernelTB.stb2text(stb).splitlines()
 
             error_content = {
                 'ename':
-                    e.__class__.__name__,
-                    'evalue': str(e),
+                    str(etype),
+                    'evalue': str(value),
                     'traceback': formatted_lines}
             if not silent:
                 self.send_response(self.iopub_socket,
