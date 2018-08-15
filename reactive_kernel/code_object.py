@@ -1,8 +1,10 @@
 from symtable import symtable, Symbol
+import symtable as symt
 import builtins as builtins_mod
 from typing import List, FrozenSet
 import random
 import string
+from io import StringIO
 
 
 def generate_id(size=24, chars=(string.ascii_letters + string.digits)):
@@ -10,6 +12,42 @@ def generate_id(size=24, chars=(string.ascii_letters + string.digits)):
 
 
 class CodeObject:
+
+    @staticmethod
+    def describe_symbol(sym):
+        output = StringIO()
+        assert isinstance(sym, symt.Symbol)
+        print("Symbol:", sym.get_name(), file=output)
+
+        for prop in [
+                'referenced', 'imported', 'parameter',
+                'global', 'declared_global', 'local',
+                'free', 'assigned', 'namespace']:
+            if getattr(sym, 'is_' + prop)():
+                print('    is', prop, file=output)
+
+        return output.getvalue()
+
+    @staticmethod
+    def describe_symtable(st, recursive=True, indent=0, output=StringIO()):
+        def print_d(s, *args, **kwargs):
+            prefix = ' ' * indent
+            print(prefix + s, *args, **kwargs)
+
+        assert isinstance(st, symt.SymbolTable)
+        print_d('Symtable: type=%s, id=%s, name=%s' % (
+            st.get_type(), st.get_id(), st.get_name()), file=output)
+        print_d('  nested:', st.is_nested(), file=output)
+        print_d('  has children:', st.has_children(), file=output)
+        print_d('  identifiers:', list(st.get_identifiers()), file=output)
+
+        if recursive:
+            for child_st in st.get_children():
+                CodeObject.describe_symtable(
+                    child_st, recursive, indent + 5, output=output)
+
+        return output.getvalue()
+
     def __init__(self, code: str):
         self.symbol_table: symtable = symtable(code, '<string>', 'exec')
         self.code: str = code
@@ -22,15 +60,20 @@ class CodeObject:
             self.display_id = generate_id()
 
     def _find_input_variables(self):
-        return list(self._find_symbol_tables(self.symbol_table))
+        imports = set()
+        return list(self._find_symbol_tables(self.symbol_table, imports))
 
-    def _find_symbol_tables(self, symbols):
+    def _find_symbol_tables(self, symbols, imports):
         for sym in symbols.get_symbols():
-            if sym.is_global() and not hasattr(builtins_mod, sym.get_name()):
+            if sym.is_imported():
+                imports.add(sym.get_name())
+
+            if sym.is_global() and not hasattr(builtins_mod,
+                                               sym.get_name()) and not sym.get_name() in imports:
                 yield SymbolWrapper(sym)
 
         for a in symbols.get_children():
-            yield from self._find_symbol_tables(a)
+            yield from self._find_symbol_tables(a, imports)
 
     def _find_output_variables(self):
         # return one top level defined variable, only including support for one
