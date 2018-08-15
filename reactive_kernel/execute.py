@@ -22,6 +22,77 @@ class LineCachingFailedException(Exception):
     pass
 
 
+class IncompleteExecutionResultException(Exception):
+    """The result was not completely filled with the appropriate data"""
+    pass
+
+
+class ExecutionResult:
+    def __init__(self):
+        self.stdout = None
+        self.stderr = None
+        self.has_output = False
+        self.output = None
+        self.has_exception = False
+        self.exception = None
+
+    def is_complete(self):
+        stdout_fulfilled = self.stdout is not None
+        stderr_fulfilled = self.stderr is not None
+        output_fulfilled = self.output is not None if self.has_output else True
+        exception_fulfilled = (self.exception is not None and len(
+            self.exception) == 3) if self.has_exception else True
+        return stdout_fulfilled and stderr_fulfilled and output_fulfilled and exception_fulfilled
+
+    def capture_io(self, stdout, stderr):
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def displayhook(self, result=None):
+        self.output = result
+        if self.output is not None:
+            self.has_output = True
+
+
+class CapturedIOCtx(object):
+    def __init__(self, container_func, capture_stdout=True,
+                 capture_stderr=True):
+        self.capture_stdout = capture_stdout
+        self.capture_stderr = capture_stderr
+        self.container_func = container_func
+
+    def __enter__(self):
+        self.sys_stdout = sys.stdout
+        self.sys_stderr = sys.stderr
+
+        stdout = stderr = None
+        if self.capture_stdout:
+            stdout = sys.stdout = io.StringIO()
+        if self.capture_stderr:
+            stderr = sys.stderr = io.StringIO()
+
+        return self.container_func(stdout, stderr)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.stdout = self.sys_stdout
+        sys.stderr = self.sys_stderr
+
+
+class CapturedDisplayCtx(object):
+    def __init__(self, capture_func):
+        self.capture_func = capture_func
+
+    def __enter__(self):
+        self.sys_displayhook = sys.displayhook
+
+        displayhook = sys.displayhook = self.capture_func
+
+        return displayhook
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.displayhook = self.sys_displayhook
+
+
 class ExecutionContext:
     def __init__(self, loader: InspectLoader, loop=None):
         self.user_ns = {}
@@ -37,17 +108,22 @@ class ExecutionContext:
                                                      debugger_cls=None)
         self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
 
-    def run_cell(self, code, name):
-        result = linecache.lazycache(
+    async def run_cell(self, code, name):
+        cache_result = linecache.lazycache(
             name, {
                 '__name__': name, '__loader__': self.loader})
-        if not result:
+        if not cache_result:
             raise LineCachingFailedException()
 
-        code_ast = ast.parse(code, filename=name, mode='exec')
-        result = self._run_ast_nodes(code_ast.body, name)
+        exec_result = ExecutionResult()
 
-        return result
+        with CapturedIOCtx(exec_result.capture_io), CapturedDisplayCtx(exec_result.displayhook):
+            code_ast = ast.parse(code, filename=name, mode='exec')
+            result = self._run_ast_nodes(code_ast.body, name)
+
+            exec_result.has_exception = result
+
+        return exec_result
 
     def _run_ast_nodes(self, nodelist, name):
         if not nodelist:

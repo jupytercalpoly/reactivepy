@@ -2,8 +2,6 @@ from ipykernel.kernelbase import Kernel
 import sys
 from .code_object import CodeObject, SymbolWrapper
 from .execute import ExecutionContext
-from .captured_io import CapturedIOCtx
-from .captured_display import CapturedDisplayCtx
 from .dependencies import DependencyTracker
 import traceback as tb
 from typing import Union, Any, Dict, FrozenSet
@@ -369,25 +367,24 @@ class ReactivePythonKernel(MetadataBaseKernel):
         return to_run, current_exec_unit
 
     def _output_exec_results(
-            self, exec_unit, current_exec_unit, captured_output, captured_io):
+            self, exec_unit, is_not_current, stdout, stderr, output):
         # 6b. Determine whether the current execution unit will be
         # directly display or update
-        message_mode = 'update_display_data' if exec_unit != current_exec_unit else 'display_data'
+        message_mode = 'update_display_data' if is_not_current else 'display_data'
 
         # 6c. Create rich outputs for captured output
-        if len(captured_output.values) > 0:
-            data, md = self.formatter.format(
-                captured_output.values[0])
+        if output is not None:
+            data, md = self.formatter.format(output)
         else:
             data, md = {}, {}
 
         # 6d. For the captured output value, stdout, and stderr
         # send appropriate responses back to the front-end
-        if len(captured_io.stdout) > 0:
+        if len(stdout) > 0:
             self.send_response(
                 self.iopub_socket, message_mode, {
                     'data': {
-                        'text/plain': captured_io.stdout
+                        'text/plain': stdout
                     },
                     'metadata': {},
                     'transient': {
@@ -395,7 +392,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
                     }
                 })
 
-        if len(captured_output.values) > 0:
+        if output is not None:
             self.send_response(self.iopub_socket, message_mode, {
                 'data': data,
                 'metadata': md,
@@ -404,10 +401,10 @@ class ReactivePythonKernel(MetadataBaseKernel):
                 }
             })
 
-        if len(captured_io.stderr) > 0:
+        if len(stderr) > 0:
             self.send_response(
                 self.iopub_socket, 'stream', {
-                    'name': 'stderr', 'text': captured_io.stderr})
+                    'name': 'stderr', 'text': stderr})
 
     async def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
                          allow_stdin=False):
@@ -430,15 +427,13 @@ class ReactivePythonKernel(MetadataBaseKernel):
             for exec_unit in to_run:
                 # 6a. Run the code and capture everything written to stdout,
                 # stderr, and the displayhook
-                with CapturedIOCtx() as captured_io, CapturedDisplayCtx() as captured_output:
-                    self._execution_ctx.run_cell(
-                        exec_unit.code_obj.code, exec_unit.display_id)
+                exec_result = await self._execution_ctx.run_cell(exec_unit.code_obj.code, exec_unit.display_id)
 
                 if not silent:
                     self._output_exec_results(
-                        exec_unit, current_exec_unit, captured_output, captured_io)
+                        exec_unit, exec_unit != current_exec_unit, exec_result.stdout.getvalue(), exec_result.stderr.getvalue(), exec_result.output)
 
-        except Exception as e:
+        except Exception:
             etype, value, tb = sys.exc_info()
             stb = self.KernelTB.structured_traceback(
                 etype, value, tb
