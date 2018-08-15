@@ -10,9 +10,11 @@ import IPython.core.ultratb as ultratb
 from importlib.abc import InspectLoader
 from .transactional import TransactionDict, TransactionalABC
 from tornado.ioloop import IOLoop
+from asyncio.locks import Lock
 import time
 from ipython_genutils import py3compat
 from ipykernel.jsonutil import json_clean
+from functools import partial
 
 __version__ = '0.1.0'
 
@@ -190,6 +192,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._eventloop = IOLoop.current()
+        self._execution_lock = Lock(loop=self._eventloop.asyncio_loop)
         self._dep_tracker = DependencyTracker()
         self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
@@ -264,36 +267,36 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
         return current_exec_unit
 
-    # COPIED FROM IPYKERNEL/KERNELBASE.PY
-    def execute_request(self, stream, ident, parent):
-        """handle an execute_request"""
+    async def _inner_execute_request_callback(self, stream, ident, parent):
+        # COPIED FROM IPYKERNEL/KERNELBASE.PY
+        async with self._execution_lock:
+            try:
+                content = parent[u'content']
+                code = py3compat.cast_unicode_py2(content[u'code'])
+                silent = content[u'silent']
+                store_history = content.get(u'store_history', not silent)
+                user_expressions = content.get('user_expressions', {})
+                allow_stdin = content.get('allow_stdin', False)
+            except BaseException:
+                self.log.error("Got bad msg: ")
+                self.log.error("%s", parent)
+                return
 
-        try:
-            content = parent[u'content']
-            code = py3compat.cast_unicode_py2(content[u'code'])
-            silent = content[u'silent']
-            store_history = content.get(u'store_history', not silent)
-            user_expressions = content.get('user_expressions', {})
-            allow_stdin = content.get('allow_stdin', False)
-        except BaseException:
-            self.log.error("Got bad msg: ")
-            self.log.error("%s", parent)
-            return
+            # Re-broadcast our input for the benefit of listening clients, and
+            # start computing output
+            if not silent:
+                self.execution_count += 1
+                self._publish_execute_input(code, parent, self.execution_count)
 
-        stop_on_error = content.get('stop_on_error', True)
+            stop_on_error = content.get('stop_on_error', True)
 
-        metadata = self.init_metadata(parent)
+            metadata = self.init_metadata(parent)
 
-        # Re-broadcast our input for the benefit of listening clients, and
-        # start computing output
-        if not silent:
-            self.execution_count += 1
-            self._publish_execute_input(code, parent, self.execution_count)
-
-        async def inner_execute_callback(
-                code, silent, store_history, user_expressions, allow_stdin, parent, metadata, stop_on_error):
+            old_send_response = self.send_response
+            self.send_response = partial(self.session.send, parent=parent)
             reply_content = await self.do_execute(code, silent, store_history,
                                                   user_expressions, allow_stdin)
+            self.send_response = old_send_response
 
             # Flush output before sending the reply.
             sys.stdout.flush()
@@ -317,16 +320,12 @@ class ReactivePythonKernel(MetadataBaseKernel):
             if not silent and reply_msg['content']['status'] == u'error' and stop_on_error:
                 self._abort_queues()
 
+    def execute_request(self, stream, ident, parent):
+        """handle an execute_request"""
+
         self._eventloop.spawn_callback(
-            inner_execute_callback,
-            code,
-            silent,
-            store_history,
-            user_expressions,
-            allow_stdin,
-            parent,
-            metadata,
-            stop_on_error)
+            self._inner_execute_request_callback,
+            stream, ident, parent)
 
     def _update_kernel_state(self, code_obj, cell_id, deleted_cell_ids):
         # 3. If deletedCells was passed, then unpin all execution units
@@ -406,12 +405,14 @@ class ReactivePythonKernel(MetadataBaseKernel):
                 self.iopub_socket, 'stream', {
                     'name': 'stderr', 'text': stderr})
 
+    def _log(self, text):
+        self.send_response(
+            self.iopub_socket, 'stream', {
+                'name': 'stdout', 'text': text + '\n'})
+
     async def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
                          allow_stdin=False):
         try:
-            # TODO: Encapsulate the related portions of these steps into
-            # functions or classes
-
             # 1. Create code object
             code_obj = CodeObject(code)
 
