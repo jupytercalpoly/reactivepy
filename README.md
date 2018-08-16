@@ -1,2 +1,3 @@
-# reactive-kernel
+# reactivepy
+
 A reactive Python kernel

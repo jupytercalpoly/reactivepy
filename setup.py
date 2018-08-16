@@ -99,12 +99,12 @@ class PostInstallCommand(install):
         install_kernel_spec(user=user, prefix=prefix)
 
 
-setup(name='reactive-kernel',
+setup(name='reactivepy',
       version='0.1.0',
       description='Reactive Kernel for Jupyter',
       author='Richa Gadgil, Takahiro Shimokobe, Declan Kelly',
       author_email='dkelly.home@gmail.com',
-      url='https://github.com/jupytercalpoly/reactive-kernel',
+      url='https://github.com/jupytercalpoly/reactivepy',
       packages=['reactive_kernel'],
       license='BSD 3-Clause License',
       requires=[
