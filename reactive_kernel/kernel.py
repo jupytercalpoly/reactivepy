@@ -28,7 +28,7 @@ class ExecutionUnitInfo:
                  pinning_cell: Union[None, str]=None):
         self.code_obj = code_obj
         self.display_id: str = code_obj.display_id
-        self.stdout_display_id: str = 'stdout-' + code_obj.display_id
+        self.stdout_display_id: str = f"{code_obj.display_id}-stdout"
         self.pinning_cell: Union[None, str] = pinning_cell
 
     @property
@@ -174,6 +174,7 @@ class RequestInfo:
 
         # Fields to populate later
         self.metadata = None
+        self.execution_count = None
 
     def send_options(self):
         return {'parent': self.parent}
@@ -196,6 +197,7 @@ class ReactivePythonKernel(Kernel):
         self._eventloop = IOLoop.current()
         self._key = generate_id(size=32).encode('utf-8')
         self._execution_lock = Lock(loop=self._eventloop.asyncio_loop)
+        self._inner_state_lock = Lock(loop=self._eventloop.asyncio_loop)
         self._dep_tracker = DependencyTracker()
         self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
@@ -272,52 +274,49 @@ class ReactivePythonKernel(Kernel):
 
     async def _inner_execute_request_callback(self, stream, ident, parent):
         # COPIED FROM IPYKERNEL/KERNELBASE.PY
-        async with self._execution_lock:
-            try:
-                request = RequestInfo(parent, ident)
-            except BaseException:
-                self.log.error("Got bad msg: ")
-                self.log.error("%s", parent)
-                return
+        # async with self._execution_lock:
+        try:
+            request = RequestInfo(parent, ident)
+        except BaseException:
+            self.log.error("Got bad msg: ")
+            self.log.error("%s", parent)
+            return
 
-            # Re-broadcast our input for the benefit of listening clients, and
-            # start computing output
-            if not request.silent:
-                self.execution_count += 1
-                self._publish_execute_input(
-                    request.code, parent, self.execution_count)
+        # Re-broadcast our input for the benefit of listening clients, and
+        # start computing output
+        if not request.silent:
+            request.execution_count = self.execution_count = 1 + self.execution_count
+            self._publish_execute_input(
+                request.code, parent, request.execution_count)
 
-            stop_on_error = request.content.get('stop_on_error', True)
+        stop_on_error = request.content.get('stop_on_error', True)
 
-            request.metadata = self.init_metadata(parent)
+        request.metadata = self.init_metadata(parent)
 
-            old_send_response = self.send_response
-            self.send_response = partial(self.session.send, parent=parent)
-            reply_content = await self.do_execute(request)
-            self.send_response = old_send_response
+        reply_content = await self.do_execute(request)
 
-            # Flush output before sending the reply.
-            sys.stdout.flush()
-            sys.stderr.flush()
-            # FIXME: on rare occasions, the flush doesn't seem to make it to the
-            # clients... This seems to mitigate the problem, but we definitely need
-            # to better understand what's going on.
-            if self._execute_sleep:
-                time.sleep(self._execute_sleep)
+        # Flush output before sending the reply.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # FIXME: on rare occasions, the flush doesn't seem to make it to the
+        # clients... This seems to mitigate the problem, but we definitely need
+        # to better understand what's going on.
+        if self._execute_sleep:
+            time.sleep(self._execute_sleep)
 
-            # Send the reply.
-            reply_content = json_clean(reply_content)
-            request.metadata = self.finish_metadata(
-                parent, request.metadata, reply_content)
+        # Send the reply.
+        reply_content = json_clean(reply_content)
+        request.metadata = self.finish_metadata(
+            parent, request.metadata, reply_content)
 
-            reply_msg = self.session.send(stream, u'execute_reply',
-                                          reply_content, parent, metadata=request.metadata,
-                                          ident=ident)
+        reply_msg = self.session.send(stream, u'execute_reply',
+                                      reply_content, parent, metadata=request.metadata,
+                                      ident=ident)
 
-            self.log.debug("%s", reply_msg)
+        self.log.debug("%s", reply_msg)
 
-            if not request.silent and reply_msg['content']['status'] == u'error' and stop_on_error:
-                self._abort_queues()
+        if not request.silent and reply_msg['content']['status'] == u'error' and stop_on_error:
+            self._abort_queues()
 
     def execute_request(self, stream, ident, parent):
         """handle an execute_request"""
@@ -365,7 +364,7 @@ class ReactivePythonKernel(Kernel):
         return to_run, current_exec_unit
 
     def _output_exec_results(
-            self, exec_unit, is_not_current, stdout, stderr, output):
+            self, exec_unit, request: RequestInfo, is_not_current, stdout, stderr, output):
         # 6b. Determine whether the current execution unit will be
         # directly display or update
         message_mode = 'update_display_data' if is_not_current else 'display_data'
@@ -379,35 +378,34 @@ class ReactivePythonKernel(Kernel):
         # 6d. For the captured output value, stdout, and stderr
         # send appropriate responses back to the front-end
         if len(stdout) > 0:
-            self.send_response(
-                self.iopub_socket, message_mode, {
-                    'data': {
-                        'text/plain': stdout
-                    },
-                    'metadata': {},
-                    'transient': {
-                        'display_id': exec_unit.stdout_display_id
-                    }
-                })
+            self.session.send(self.iopub_socket, message_mode, content={
+                'data': {
+                    'text/plain': stdout
+                },
+                'metadata': {},
+                'transient': {
+                    'display_id': exec_unit.stdout_display_id
+                }
+            }, parent=request.parent)
 
         if output is not None:
-            self.send_response(self.iopub_socket, message_mode, {
+            self.session.send(self.iopub_socket, message_mode, content={
                 'data': data,
                 'metadata': md,
                 'transient': {
                     'display_id': exec_unit.display_id
                 }
-            })
+            }, parent=request.parent)
 
         if len(stderr) > 0:
-            self.send_response(
-                self.iopub_socket, 'stream', {
-                    'name': 'stderr', 'text': stderr})
+            self.session.send(
+                self.iopub_socket, 'stream', content={
+                    'name': 'stderr', 'text': stderr}, parent=request.parent)
 
-    def _log(self, text):
-        self.send_response(
-            self.iopub_socket, 'stream', {
-                'name': 'stdout', 'text': text + '\n'})
+    def _log(self, request, text):
+        self.session.send(
+            self.iopub_socket, 'stream', content={
+                'name': 'stdout', 'text': text + '\n'}, parent=request.parent)
 
     async def do_execute(self, request: RequestInfo):
         try:
@@ -419,18 +417,20 @@ class ReactivePythonKernel(Kernel):
             deleted_cell_ids = request.metadata[
                 'deletedCells'] if 'deletedCells' in request.metadata else None
 
-            to_run, current_exec_unit = self._update_kernel_state(
-                code_obj, cell_id, deleted_cell_ids)
+            async with self._inner_state_lock:
+                to_run, current_exec_unit = self._update_kernel_state(
+                    code_obj, cell_id, deleted_cell_ids)
 
-            # 6. For each execution unit which must be run
-            for exec_unit in to_run:
-                # 6a. Run the code and capture everything written to stdout,
-                # stderr, and the displayhook
-                exec_result = await self._execution_ctx.run_cell(exec_unit.code_obj.code, exec_unit.display_id)
+            async with self._execution_lock:
+                # 6. For each execution unit which must be run
+                for exec_unit in to_run:
+                    # 6a. Run the code and capture everything written to stdout,
+                    # stderr, and the displayhook
+                    exec_result = await self._execution_ctx.run_cell(exec_unit.code_obj.code, exec_unit.display_id)
 
-                if not request.silent:
-                    self._output_exec_results(
-                        exec_unit, exec_unit != current_exec_unit, exec_result.stdout.getvalue(), exec_result.stderr.getvalue(), exec_result.output)
+                    if not request.silent:
+                        self._output_exec_results(
+                            exec_unit, request, exec_unit != current_exec_unit, exec_result.stdout.getvalue(), exec_result.stderr.getvalue(), exec_result.output)
 
         except Exception:
             etype, value, tb = sys.exc_info()
@@ -445,12 +445,12 @@ class ReactivePythonKernel(Kernel):
                     'evalue': str(value),
                     'traceback': formatted_lines}
             if not request.silent:
-                self.send_response(self.iopub_socket,
-                                   'error', error_content)
+                self.session.send(self.iopub_socket,
+                                   'error', content=error_content, parent=request.parent)
             error_content['status'] = 'error'
 
             return error_content
 
         return {'status': 'ok',
-                'execution_count': self.execution_count,
+                'execution_count': request.execution_count,
                 }
