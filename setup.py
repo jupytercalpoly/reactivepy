@@ -11,7 +11,7 @@ from jupyter_client.kernelspec import KernelSpecManager
 from IPython.utils.tempdir import TemporaryDirectory
 
 kernel_json = {
-    'argv': [sys.executable, '-m', 'reactive_kernel', '-f', '{connection_file}'],
+    'argv': [sys.executable, '-m', 'reactivepy', '-f', '{connection_file}'],
     'display_name': 'Reactive Python',
     'language': 'python',
 }
@@ -34,7 +34,7 @@ def install_kernel_spec(user=True, prefix=None):
 
         print('Installing Jupyter kernel spec to', prefix)
         KernelSpecManager().install_kernel_spec(
-            td, 'reactive_kernel', user=user, prefix=prefix)
+            td, 'reactivepy', user=user, prefix=prefix)
 
 
 def _is_root():
@@ -105,7 +105,7 @@ setup(name='reactivepy',
       author='Richa Gadgil, Takahiro Shimokobe, Declan Kelly',
       author_email='dkelly.home@gmail.com',
       url='https://github.com/jupytercalpoly/reactivepy',
-      packages=['reactive_kernel'],
+      packages=['reactivepy'],
       license='BSD 3-Clause License',
       requires=[
           'ipython>=4.0.0',

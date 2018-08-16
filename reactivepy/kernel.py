@@ -181,7 +181,7 @@ class RequestInfo:
 
 
 class ReactivePythonKernel(Kernel):
-    implementation = 'reactive_python'
+    implementation = 'reactivepy'
     implementation_version = __version__
     language_info = {
         'name': 'python',
