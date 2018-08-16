@@ -12,6 +12,7 @@ import linecache
 import time
 from tornado.ioloop import IOLoop
 from importlib.abc import InspectLoader
+import inspect
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)
 _single_targets_nodes = (ast.AugAssign, ast.AnnAssign)
@@ -22,10 +23,82 @@ class LineCachingFailedException(Exception):
     pass
 
 
+class IncompleteExecutionResultException(Exception):
+    """The result was not completely filled with the appropriate data"""
+    pass
+
+
+class ExecutionResult:
+    def __init__(self):
+        self.stdout = None
+        self.stderr = None
+        self.has_output = False
+        self.output = None
+        self.target_id = None
+        self.has_exception = False
+        self.exception = None
+
+    def is_complete(self):
+        stdout_fulfilled = self.stdout is not None
+        stderr_fulfilled = self.stderr is not None
+        output_fulfilled = (
+            self.output is not None and self.target_id is not None) if self.has_output else True
+        exception_fulfilled = (self.exception is not None and len(
+            self.exception) == 3) if self.has_exception else True
+        return stdout_fulfilled and stderr_fulfilled and output_fulfilled and exception_fulfilled
+
+    def capture_io(self, stdout, stderr):
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def displayhook(self, result=None):
+        self.output = result
+        if self.output is not None:
+            self.has_output = True
+
+
+class CapturedIOCtx(object):
+    def __init__(self, container_func, capture_stdout=True,
+                 capture_stderr=True):
+        self.capture_stdout = capture_stdout
+        self.capture_stderr = capture_stderr
+        self.container_func = container_func
+
+    def __enter__(self):
+        self.sys_stdout = sys.stdout
+        self.sys_stderr = sys.stderr
+
+        stdout = stderr = None
+        if self.capture_stdout:
+            stdout = sys.stdout = io.StringIO()
+        if self.capture_stderr:
+            stderr = sys.stderr = io.StringIO()
+
+        return self.container_func(stdout, stderr)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.stdout = self.sys_stdout
+        sys.stderr = self.sys_stderr
+
+
+class CapturedDisplayCtx(object):
+    def __init__(self, capture_func):
+        self.capture_func = capture_func
+
+    def __enter__(self):
+        self.sys_displayhook = sys.displayhook
+
+        displayhook = sys.displayhook = self.capture_func
+
+        return displayhook
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.displayhook = self.sys_displayhook
+
+
 class ExecutionContext:
     def __init__(self, loader: InspectLoader, loop=None):
         self.user_ns = {}
-        self.global_ns = {}
         if loop is None:
             loop = IOLoop.current()
         self.loop = loop
@@ -37,21 +110,33 @@ class ExecutionContext:
                                                      debugger_cls=None)
         self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
 
-    def run_cell(self, code, name):
-        result = linecache.lazycache(
+    async def run_cell(self, code, name):
+        cache_result = linecache.lazycache(
             name, {
                 '__name__': name, '__loader__': self.loader})
-        if not result:
+        if not cache_result:
             raise LineCachingFailedException()
 
-        code_ast = ast.parse(code, filename=name, mode='exec')
-        result = self._run_ast_nodes(code_ast.body, name)
+        exec_result = ExecutionResult()
 
-        return result
+        with CapturedIOCtx(exec_result.capture_io), CapturedDisplayCtx(exec_result.displayhook):
+            code_ast = ast.parse(code, filename=name, mode='exec')
+            run_failed, output_name = self._run_ast_nodes(code_ast.body, name)
+
+            exec_result.has_exception = run_failed
+            exec_result.target_id = output_name
+
+        if exec_result.output is not None and inspect.isawaitable(
+                exec_result.output):
+            exec_result.output = await exec_result.output
+            self.user_ns[exec_result.target_id] = exec_result.output
+
+        return exec_result
 
     def _run_ast_nodes(self, nodelist, name):
+        output_name = None
         if not nodelist:
-            return
+            return True, output_name
 
         if isinstance(nodelist[-1], _assign_nodes):
             asg = nodelist[-1]
@@ -62,6 +147,7 @@ class ExecutionContext:
             else:
                 target = None
             if isinstance(target, ast.Name):
+                output_name = target.id
                 nnode = ast.Expr(ast.Name(target.id, ast.Load()))
                 ast.fix_missing_locations(nnode)
                 nodelist.append(nnode)
@@ -75,24 +161,24 @@ class ExecutionContext:
             mod = ast.Module(to_run_exec)
             code = compile(mod, name, 'exec')
             if self._run_code(code):
-                return True
+                return True, output_name
 
             for node in to_run_interactive:
                 mod = ast.Interactive([node])
                 code = compile(mod, name, 'single')
                 if self._run_code(code):
-                    return True
+                    return True, output_name
         except BaseException:
-            return True
+            return True, output_name
 
-        return False
+        return False, output_name
 
     def _run_code(self, code_obj):
         old_excepthook, sys.excepthook = sys.excepthook, self.excepthook
         outflag = True  # happens in more places, so it's easier as default
         try:
             try:
-                exec(code_obj, self.global_ns, self.user_ns)
+                exec(code_obj, self.user_ns, self.user_ns)
             finally:
                 # Reset our crash handler in place
                 sys.excepthook = old_excepthook

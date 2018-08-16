@@ -108,10 +108,16 @@ setup(name='reactive-kernel',
       packages=['reactive_kernel'],
       license='BSD 3-Clause License',
       requires=[
-          'jupyter_client', 'IPython', 'ipykernel'
+          'ipython>=4.0.0',
+          'jupyter_client',
+          'tornado>=4.0',
+          'ipykernel>=4.8'
       ],
       install_requires=[
-          'jupyter_client', 'IPython', 'ipykernel'
+          'ipython>=4.0.0',
+          'jupyter_client',
+          'tornado>=4.0',
+          'ipykernel>=4.8'
       ],
       classifiers=[
           'Intended Audience :: Developers',
