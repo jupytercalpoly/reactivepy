@@ -21,28 +21,6 @@ import string
 __version__ = '0.1.0'
 
 
-class MetadataBaseKernel(Kernel):
-
-    def init_metadata(self, parent):
-        """Initialize metadata.
-
-        Run at the beginning of execution requests.
-        """
-
-        self.current_metadata = super(
-            MetadataBaseKernel, self).init_metadata(parent)
-        return self.current_metadata
-
-    def finish_metadata(self, parent, metadata, reply_content):
-        """Finish populating metadata.
-
-        Run after completing an execution request.
-        """
-        self.current_metadata = None
-        return super(MetadataBaseKernel, self).finish_metadata(
-            parent, metadata, reply_content)
-
-
 class ExecutionUnitInfo:
     """ Container of all relevant information needed to update, execute, and display any code sent"""
 
@@ -183,7 +161,25 @@ def generate_id(size=24, chars=(string.ascii_letters + string.digits)):
     return ''.join(random.choice(chars) for _ in range(size))
 
 
-class ReactivePythonKernel(MetadataBaseKernel):
+class RequestInfo:
+    def __init__(self, parent, ident):
+        self.parent = parent
+        self.ident = ident
+        content = self.content = parent[u'content']
+        self.code = py3compat.cast_unicode_py2(content[u'code'])
+        self.silent = content[u'silent']
+        self.store_history = content.get(u'store_history', not self.silent)
+        self.user_expressions = content.get('user_expressions', {})
+        self.allow_stdin = content.get('allow_stdin', False)
+
+        # Fields to populate later
+        self.metadata = None
+
+    def send_options(self):
+        return {'parent': self.parent}
+
+
+class ReactivePythonKernel(Kernel):
     implementation = 'reactive_python'
     implementation_version = __version__
     language_info = {
@@ -278,12 +274,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
         # COPIED FROM IPYKERNEL/KERNELBASE.PY
         async with self._execution_lock:
             try:
-                content = parent[u'content']
-                code = py3compat.cast_unicode_py2(content[u'code'])
-                silent = content[u'silent']
-                store_history = content.get(u'store_history', not silent)
-                user_expressions = content.get('user_expressions', {})
-                allow_stdin = content.get('allow_stdin', False)
+                request = RequestInfo(parent, ident)
             except BaseException:
                 self.log.error("Got bad msg: ")
                 self.log.error("%s", parent)
@@ -291,18 +282,18 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
             # Re-broadcast our input for the benefit of listening clients, and
             # start computing output
-            if not silent:
+            if not request.silent:
                 self.execution_count += 1
-                self._publish_execute_input(code, parent, self.execution_count)
+                self._publish_execute_input(
+                    request.code, parent, self.execution_count)
 
-            stop_on_error = content.get('stop_on_error', True)
+            stop_on_error = request.content.get('stop_on_error', True)
 
-            metadata = self.init_metadata(parent)
+            request.metadata = self.init_metadata(parent)
 
             old_send_response = self.send_response
             self.send_response = partial(self.session.send, parent=parent)
-            reply_content = await self.do_execute(code, silent, store_history,
-                                                  user_expressions, allow_stdin)
+            reply_content = await self.do_execute(request)
             self.send_response = old_send_response
 
             # Flush output before sending the reply.
@@ -316,15 +307,16 @@ class ReactivePythonKernel(MetadataBaseKernel):
 
             # Send the reply.
             reply_content = json_clean(reply_content)
-            metadata = self.finish_metadata(parent, metadata, reply_content)
+            request.metadata = self.finish_metadata(
+                parent, request.metadata, reply_content)
 
             reply_msg = self.session.send(stream, u'execute_reply',
-                                          reply_content, parent, metadata=metadata,
+                                          reply_content, parent, metadata=request.metadata,
                                           ident=ident)
 
             self.log.debug("%s", reply_msg)
 
-            if not silent and reply_msg['content']['status'] == u'error' and stop_on_error:
+            if not request.silent and reply_msg['content']['status'] == u'error' and stop_on_error:
                 self._abort_queues()
 
     def execute_request(self, stream, ident, parent):
@@ -417,16 +409,15 @@ class ReactivePythonKernel(MetadataBaseKernel):
             self.iopub_socket, 'stream', {
                 'name': 'stdout', 'text': text + '\n'})
 
-    async def do_execute(self, code: str, silent: bool, store_history=True, user_expressions=None,
-                         allow_stdin=False):
+    async def do_execute(self, request: RequestInfo):
         try:
             # 1. Create code object
-            code_obj = CodeObject(code, self._key)
+            code_obj = CodeObject(request.code, self._key)
 
             # 2. Extract metadata (both are optional)
-            cell_id = self.current_metadata['cellId'] if 'cellID' in self.current_metadata else None
-            deleted_cell_ids = self.current_metadata[
-                'deletedCells'] if 'deletedCells' in self.current_metadata else None
+            cell_id = request.metadata['cellId'] if 'cellID' in request.metadata else None
+            deleted_cell_ids = request.metadata[
+                'deletedCells'] if 'deletedCells' in request.metadata else None
 
             to_run, current_exec_unit = self._update_kernel_state(
                 code_obj, cell_id, deleted_cell_ids)
@@ -437,7 +428,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
                 # stderr, and the displayhook
                 exec_result = await self._execution_ctx.run_cell(exec_unit.code_obj.code, exec_unit.display_id)
 
-                if not silent:
+                if not request.silent:
                     self._output_exec_results(
                         exec_unit, exec_unit != current_exec_unit, exec_result.stdout.getvalue(), exec_result.stderr.getvalue(), exec_result.output)
 
@@ -453,7 +444,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
                     str(etype),
                     'evalue': str(value),
                     'traceback': formatted_lines}
-            if not silent:
+            if not request.silent:
                 self.send_response(self.iopub_socket,
                                    'error', error_content)
             error_content['status'] = 'error'

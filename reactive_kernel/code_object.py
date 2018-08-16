@@ -3,7 +3,7 @@ import symtable as symt
 import builtins as builtins_mod
 from typing import List, FrozenSet
 from io import StringIO
-from hashlib import blake2s
+from hashlib import blake2b
 
 
 class CodeObject:
@@ -50,7 +50,7 @@ class CodeObject:
         self.output_vars: FrozenSet[SymbolWrapper] = self._find_output_variables(
         )
 
-        h = blake2s(digest_size=10, key=key)
+        h = blake2b(digest_size=10, key=key)
         if len(self.output_vars) > 0:
             display_id_prefix = "+".join(map(str, self.output_vars))
             h.update(display_id_prefix.encode('utf-8'))
