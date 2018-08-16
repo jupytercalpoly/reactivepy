@@ -96,12 +96,9 @@ class CapturedDisplayCtx(object):
         sys.displayhook = self.sys_displayhook
 
 
-class ExecutionContext:
-    def __init__(self, loader: InspectLoader, loop=None):
+class Executor:
+    def __init__(self, loader: InspectLoader):
         self.user_ns = {}
-        if loop is None:
-            loop = IOLoop.current()
-        self.loop = loop
         self.loader = loader
         self.excepthook = sys.excepthook
         self.InteractiveTB = ultratb.AutoFormattedTB(mode='Plain',

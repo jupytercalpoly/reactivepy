@@ -1,7 +1,7 @@
 from ipykernel.kernelbase import Kernel
 import sys
 from .code_object import CodeObject, SymbolWrapper
-from .execute import ExecutionContext
+from .execute import Executor
 from .dependencies import DependencyTracker
 import traceback as tb
 from typing import Union, Any, Dict, FrozenSet
@@ -15,6 +15,8 @@ import time
 from ipython_genutils import py3compat
 from ipykernel.jsonutil import json_clean
 from functools import partial
+import random
+import string
 
 __version__ = '0.1.0'
 
@@ -177,6 +179,10 @@ class ExecUnitContainer(InspectLoader, TransactionalABC):
         self._symbol_to_display_id.rollback()
 
 
+def generate_id(size=24, chars=(string.ascii_letters + string.digits)):
+    return ''.join(random.choice(chars) for _ in range(size))
+
+
 class ReactivePythonKernel(MetadataBaseKernel):
     implementation = 'reactive_python'
     implementation_version = __version__
@@ -192,12 +198,13 @@ class ReactivePythonKernel(MetadataBaseKernel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._eventloop = IOLoop.current()
+        self._key = generate_id(size=32).encode('utf-8')
         self._execution_lock = Lock(loop=self._eventloop.asyncio_loop)
         self._dep_tracker = DependencyTracker()
         self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
-        self._execution_ctx = ExecutionContext(
-            self._exec_unit_container, loop=self.eventloop)
+        self._execution_ctx = Executor(
+            self._exec_unit_container)
         self.KernelTB = ultratb.AutoFormattedTB(mode='Plain',
                                                 color_scheme='LightBG',
                                                 tb_offset=1,
@@ -414,7 +421,7 @@ class ReactivePythonKernel(MetadataBaseKernel):
                          allow_stdin=False):
         try:
             # 1. Create code object
-            code_obj = CodeObject(code)
+            code_obj = CodeObject(code, self._key)
 
             # 2. Extract metadata (both are optional)
             cell_id = self.current_metadata['cellId'] if 'cellID' in self.current_metadata else None
