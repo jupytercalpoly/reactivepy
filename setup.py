@@ -33,6 +33,9 @@ def install_kernel_spec(user=True, prefix=None):
         os.chmod(td, 0o755)  # Starts off as 700, not user readable
         with open(os.path.join(td, 'kernel.json'), 'w') as f:
             json.dump(kernel_json, f, sort_keys=True)
+            shutil.copy2('reactivepy/images/logo-32x32.png', td)
+            shutil.copy2('reactivepy/images/logo-64x64.png', td)
+
         # TODO: Copy any resources
 
         print('Installing Jupyter kernel spec to', prefix)
@@ -144,6 +147,7 @@ setup(name='reactivepy',
       author_email='dkelly.home@gmail.com',
       url='https://github.com/jupytercalpoly/reactivepy',
       packages=['reactivepy'],
+      package_data={'reactivepy': ["images/*.png"]},
       license='BSD 3-Clause License',
       requires=[
           'ipython',
