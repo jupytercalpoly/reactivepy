@@ -190,17 +190,21 @@ class DependencyTracker(Generic[NodeT]):
         if defined_vars not in self._nodes:
             raise CodeObjectNotFoundException()
 
+        visited = set()
         unique_descendants = set(
-            self._get_descendants(defined_vars)) - {defined_vars}
+            self._get_descendants(defined_vars, visited)) - {defined_vars}
 
         return sorted(unique_descendants,
                       key=lambda node: self._ordering[node])
 
-    def _get_descendants(self, output_vars):
-        yield output_vars
+    def _get_descendants(self, output_vars, visited):
+        if output_vars not in visited:
+            yield output_vars
 
-        for descendent in self._edges[output_vars]:
-            yield from self._get_descendants(descendent)
+            visited.add(output_vars)
+
+            for descendent in self._edges[output_vars]:
+                yield from self._get_descendants(descendent, visited)
 
     def __contains__(self, defined_vars: NodeT) -> bool:
         """Test whether code object is already present in dependency tracker"""
