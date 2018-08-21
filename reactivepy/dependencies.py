@@ -172,6 +172,16 @@ class DependencyTracker(Generic[NodeT]):
         for (node, order_value) in zip(L, R):
             self._ordering[node] = order_value
 
+    def delete_node(self, defined_vars: NodeT):
+        if defined_vars not in self._nodes:
+            raise CodeObjectNotFoundException()
+
+        for child in self._edges[defined_vars]:
+            self.delete_edge(defined_vars, child)
+
+        for parent in self._edges[defined_vars]:
+            self.delete_edge(parent, defined_vars)
+
     def delete_edge(self, from_output_vars: NodeT,
                     to_output_vars: NodeT):
         if from_output_vars not in self._nodes or to_output_vars not in self._nodes:
