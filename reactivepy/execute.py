@@ -12,7 +12,6 @@ import linecache
 import time
 from tornado.ioloop import IOLoop
 from importlib.abc import InspectLoader
-import inspect
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)
 _single_targets_nodes = (ast.AugAssign, ast.AnnAssign)
@@ -107,7 +106,49 @@ class Executor:
                                                      debugger_cls=None)
         self.SyntaxTB = ultratb.SyntaxTB(color_scheme='NoColor')
 
-    async def run_cell(self, code, name):
+    async def run_coroutine(self, coroutine, variable_name, nohandle_exceptions=()):
+        exec_result = ExecutionResult()
+        exec_result.target_id = variable_name
+
+        with CapturedIOCtx(exec_result.capture_io), CapturedDisplayCtx(exec_result.displayhook):
+            exec_result.has_exception = True
+            try:
+                exec_result.output = await coroutine
+            except nohandle_exceptions as e:
+                raise e
+            except BaseException as e:
+                try:
+                    etype, value, tb = sys.exc_info()
+                    stb = self.InteractiveTB.structured_traceback(
+                        etype, value, tb
+                    )
+
+                    if issubclass(etype, SyntaxError):
+                        # If the error occurred when executing compiled code, we
+                        # should provide full stacktrace
+                        elist = traceback.extract_tb(tb)
+                        stb = self.SyntaxTB.structured_traceback(
+                            etype, value, elist)
+                        print(
+                            self.InteractiveTB.stb2text(stb),
+                            file=sys.stderr)
+                    else:
+                        # Actually show the traceback
+                        print(
+                            self.InteractiveTB.stb2text(stb),
+                            file=sys.stderr)
+                except BaseException as e:
+                    print(e)
+            else:
+                exec_result.has_exception = False
+                self.update_ns({exec_result.target_id: exec_result.output})
+
+        return exec_result
+
+    def update_ns(self, *args, **kwargs):
+        self.user_ns.update(*args, **kwargs)
+
+    def run_cell(self, code, name):
         cache_result = linecache.lazycache(
             name, {
                 '__name__': name, '__loader__': self.loader})
@@ -122,11 +163,6 @@ class Executor:
 
             exec_result.has_exception = run_failed
             exec_result.target_id = output_name
-
-        if exec_result.output is not None and inspect.isawaitable(
-                exec_result.output):
-            exec_result.output = await exec_result.output
-            self.user_ns[exec_result.target_id] = exec_result.output
 
         return exec_result
 
