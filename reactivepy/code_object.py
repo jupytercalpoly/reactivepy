@@ -5,6 +5,16 @@ from typing import List, FrozenSet
 from io import StringIO
 from hashlib import blake2b
 
+ESCAPE_TABLE = str.maketrans({'\a': r'\a',
+                              '\b': r'\b',
+                              '\f': r'\f',
+                              '\n': r'\n',
+                              '\r': r'\r',
+                              '\t': r'\t',
+                              '\v': r'\v',
+                              '\'': r'\'',
+                              '\"': r'\"'})
+
 
 class CodeObject:
 
@@ -57,7 +67,7 @@ class CodeObject:
             self.display_id = f"{display_id_prefix}-{h.hexdigest()}"
         else:
             h.update(self.code.encode('utf-8'))
-            self.display_id = h.hexdigest()
+            self.display_id = f"{h.hexdigest()}"
 
     def _find_input_variables(self):
         imports = set()
@@ -97,7 +107,7 @@ class CodeObject:
         return False
 
     def __repr__(self):
-        return f"<Code in:{str(self.input_vars)} out:{str(list(self.output_vars))} code:\"{self.code}\">"
+        return f"<Code in:{str(self.input_vars)} out:{str(list(self.output_vars))} code:\"{self.code.translate(ESCAPE_TABLE)}\">"
 
 
 class SymbolWrapper:
