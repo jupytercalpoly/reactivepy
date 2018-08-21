@@ -2,13 +2,18 @@ from symtable import symtable, Symbol
 import symtable as symt
 import builtins as builtins_mod
 from typing import List, FrozenSet
-import random
-import string
 from io import StringIO
+from hashlib import blake2b
 
-
-def generate_id(size=24, chars=(string.ascii_letters + string.digits)):
-    return ''.join(random.choice(chars) for _ in range(size))
+ESCAPE_TABLE = str.maketrans({'\a': r'\a',
+                              '\b': r'\b',
+                              '\f': r'\f',
+                              '\n': r'\n',
+                              '\r': r'\r',
+                              '\t': r'\t',
+                              '\v': r'\v',
+                              '\'': r'\'',
+                              '\"': r'\"'})
 
 
 class CodeObject:
@@ -48,16 +53,21 @@ class CodeObject:
 
         return output.getvalue()
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, key: bytes):
         self.symbol_table: symtable = symtable(code, '<string>', 'exec')
         self.code: str = code
         self.input_vars: List[SymbolWrapper] = self._find_input_variables()
         self.output_vars: FrozenSet[SymbolWrapper] = self._find_output_variables(
         )
+
+        h = blake2b(digest_size=10, key=key)
         if len(self.output_vars) > 0:
-            self.display_id = "+".join(map(str, self.output_vars))
+            display_id_prefix = "+".join(map(str, self.output_vars))
+            h.update(display_id_prefix.encode('utf-8'))
+            self.display_id = f"{display_id_prefix}-{h.hexdigest()}"
         else:
-            self.display_id = generate_id()
+            h.update(self.code.encode('utf-8'))
+            self.display_id = f"{h.hexdigest()}"
 
     def _find_input_variables(self):
         imports = set()
@@ -97,7 +107,7 @@ class CodeObject:
         return False
 
     def __repr__(self):
-        return f"<Code in:{str(self.input_vars)} out:{str(list(self.output_vars))} code:\"{self.code}\">"
+        return f"<Code in:{str(self.input_vars)} out:{str(list(self.output_vars))} code:\"{self.code.translate(ESCAPE_TABLE)}\">"
 
 
 class SymbolWrapper:

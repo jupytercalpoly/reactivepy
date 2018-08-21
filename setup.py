@@ -3,15 +3,16 @@
 from setuptools import setup
 from setuptools.command.develop import develop
 from setuptools.command.install import install
+from setuptools import Command
+import glob
 import argparse
 import json
 import os
 import sys
-from jupyter_client.kernelspec import KernelSpecManager
-from IPython.utils.tempdir import TemporaryDirectory
+import shutil
 
 kernel_json = {
-    'argv': [sys.executable, '-m', 'reactive_kernel', '-f', '{connection_file}'],
+    'argv': [sys.executable, '-m', 'reactivepy', '-f', '{connection_file}'],
     'display_name': 'Reactive Python',
     'language': 'python',
 }
@@ -26,15 +27,21 @@ common_options = [
 
 
 def install_kernel_spec(user=True, prefix=None):
+    from jupyter_client.kernelspec import KernelSpecManager
+    from IPython.utils.tempdir import TemporaryDirectory
+
     with TemporaryDirectory() as td:
         os.chmod(td, 0o755)  # Starts off as 700, not user readable
         with open(os.path.join(td, 'kernel.json'), 'w') as f:
             json.dump(kernel_json, f, sort_keys=True)
+            shutil.copy2('reactivepy/images/logo-32x32.png', td)
+            shutil.copy2('reactivepy/images/logo-64x64.png', td)
+
         # TODO: Copy any resources
 
         print('Installing Jupyter kernel spec to', prefix)
         KernelSpecManager().install_kernel_spec(
-            td, 'reactive_kernel', user=user, prefix=prefix)
+            td, 'reactivepy', user=user, prefix=prefix)
 
 
 def _is_root():
@@ -42,6 +49,9 @@ def _is_root():
         return os.geteuid() == 0
     except AttributeError:
         return False
+
+
+HERE = os.path.realpath(os.path.dirname(__file__))
 
 
 def calculate_user_prefix(options):
@@ -99,19 +109,51 @@ class PostInstallCommand(install):
         install_kernel_spec(user=user, prefix=prefix)
 
 
-setup(name='reactive-kernel',
+class CleanCommand(Command):
+    """Custom clean command to tidy up the project root."""
+    CLEAN_FILES = './build ./dist ./*.pyc ./*.tgz ./*.egg-info'.split(' ')
+
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        global HERE
+
+        for path_spec in self.CLEAN_FILES:
+            # Make paths absolute and relative to this path
+            abs_paths = glob.glob(
+                os.path.normpath(
+                    os.path.join(
+                        HERE, path_spec)))
+            for path in [str(p) for p in abs_paths]:
+                if not path.startswith(HERE):
+                    # Die if path in CLEAN_FILES is absolute + outside this
+                    # directory
+                    raise ValueError(
+                        "%s is not a path inside %s" %
+                        (path, HERE))
+                print('removing %s' % os.path.relpath(path))
+                shutil.rmtree(path)
+
+
+setup(name='reactivepy',
       version='0.1.0',
       description='Reactive Kernel for Jupyter',
       author='Richa Gadgil, Takahiro Shimokobe, Declan Kelly',
       author_email='dkelly.home@gmail.com',
-      url='https://github.com/jupytercalpoly/reactive-kernel',
-      packages=['reactive_kernel'],
+      url='https://github.com/jupytercalpoly/reactivepy',
+      packages=['reactivepy'],
+      package_data={'reactivepy': ["images/*.png"]},
       license='BSD 3-Clause License',
       requires=[
-          'ipython>=4.0.0',
-          'jupyter_client',
-          'tornado>=4.0',
-          'ipykernel>=4.8'
+          'ipython',
+          'jupyter_client', 'tornado',
+          'ipykernel'
       ],
       install_requires=[
           'ipython>=4.0.0',
@@ -127,5 +169,6 @@ setup(name='reactive-kernel',
       cmdclass={
           'develop': PostDevelopCommand,
           'install': PostInstallCommand,
+          'clean': CleanCommand
       },
       )
