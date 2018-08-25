@@ -202,6 +202,8 @@ class AsyncGenContainer:
 
 
 class ReactivePythonKernel(Kernel):
+    _DEBUG = False
+
     implementation = 'reactivepy'
     implementation_version = __version__
     language_info = {
@@ -238,7 +240,7 @@ class ReactivePythonKernel(Kernel):
         self._registered_generators = dict()
 
         self._eventloop.spawn_callback(
-            self._execution_loop)
+            self._execution_loop_step)
 
     async def _run_single_async_iter_step(self, item, exec_unit):
         # Make sure only single variable is important for execution
@@ -251,8 +253,8 @@ class ReactivePythonKernel(Kernel):
             target_id]
         async with self._inner_state_lock:
             if request_id != item.request.msg_id and insert_id < item.id:
-                # self._log(item.request,
-                #           f"Cancelling ({request_id}, {insert_id}) for ({item.request.msg_id}, {item.id}) 1")
+                self._log(item.request,
+                          f"Cancelling({request_id}, {insert_id}) for ({item.request.msg_id}, {item.id}) 1")
                 await async_gen_obj.aclose()
 
                 self._registered_generators[target_id] = item.request.msg_id, item.async_gen_obj, item.id
@@ -260,9 +262,11 @@ class ReactivePythonKernel(Kernel):
                 return None
 
         try:
-            exec_result = await self._execution_ctx.run_coroutine(anext(item.async_gen_obj), target_id, nohandle_exceptions=(StopAsyncIteration, ))
+            exec_result = await self._execution_ctx.run_coroutine(anext(item.async_gen_obj), target_id, nohandle_exceptions=(StopAsyncIteration, GeneratorExit))
         except StopAsyncIteration as e:
             # iteration is complete
+            raise e
+        except GeneratorExit as e:
             raise e
 
         # Schedule next instance of iterator
@@ -283,25 +287,24 @@ class ReactivePythonKernel(Kernel):
         return exec_result
 
     async def _first_async_iter_step(self, item: ExecBlock, exec_unit: ExecutionUnitInfo, exec_result: ExecutionResult):
-        # self._log(item.request, "Before inner state lock")
+        self._log(item.request, "Before inner state lock")
         async with self._inner_state_lock:
-            # self._log(item.request, "After inner state lock")
+            self._log(item.request, "After inner state lock")
             if exec_result.target_id in self._registered_generators:
                 request_id, async_gen_obj, insert_id = self._registered_generators[
                     exec_result.target_id]
 
                 if insert_id < item.id:
-                    # self._log(
-                    #     item.request, f"Cancelling ({request_id}, {insert_id}) for ({item.request.msg_id}, {item.id}) 2")
+                    self._log(item.request, f"Cancelling({request_id}, {insert_id}) for ({item.request.msg_id}, {item.id}) 2")
 
                     await async_gen_obj.aclose()
                 else:
                     raise ValueError(
                         f"Very confuse. {insert_id} vs {item.id}")
 
-            # self._log(
-            #     item.request,
-            #     f"Storing {(item.request.msg_id, exec_result.output, item.id)}")
+            self._log(
+                item.request,
+                f"Storing {(item.request.msg_id, exec_result.output, item.id)}")
             self._registered_generators[exec_result.target_id] = item.request.msg_id, exec_result.output, item.id
 
         # Get first value and replace async gen with first
@@ -328,82 +331,87 @@ class ReactivePythonKernel(Kernel):
 
         return True
 
-    async def _execution_loop(self):
-        while True:
-            item: ExecBlock = await self._execution_queue.get()
-            # self._log(item.request, f"Handling {item.request.msg_id}")
-            if item is None:
-                # Use None to signal end
-                # self._log(item.request, 'Breaking execution loop!')
-                break
+    async def _execution_loop_step(self):
+        item: ExecBlock = await self._execution_queue.get()
+        self._log(item.request, f"Handling {item.request.msg_id}")
+        if item is None:
+            # Use None to signal end
+            self._log(item.request, 'Breaking execution loop!')
+            return
+        else:
+            self._eventloop.spawn_callback(self._execution_loop_step)
 
-            for exec_unit in ([item.current] + item.descendants):
-                # async with self._execution_lock:
-                # self._log(item.request, exec_unit.display_id)
+        for exec_unit in ([item.current] + item.descendants):
+            # async with self._execution_lock:
+            self._log(item.request, exec_unit.display_id)
 
-                is_current = exec_unit == item.current
-                is_iter = item.is_iter_exec and is_current
+            is_current = exec_unit == item.current
+            is_iter = item.is_iter_exec and is_current
 
-                if is_iter:
-                    # self._log(item.request, "Stepping iter")
+            if is_iter:
+                self._log(item.request, "Stepping iter")
 
-                    try:
-                        exec_result = await self._run_single_async_iter_step(item, exec_unit)
-                    except StopAsyncIteration:
-                        # self._log(item.request,
-                        #           'Step failed, breaking exec unit loop!')
+                try:
+                    exec_result = await self._run_single_async_iter_step(item, exec_unit)
+                except StopAsyncIteration:
+                    self._log(item.request,
+                              'Step failed, breaking exec unit loop!')
+                    break
+                except GeneratorExit:
+                    self._log(item.request,
+                              'Generator stopped, breaking exec unit loop!')
+                    break
+            else:
+                self._log(item.request, "Executing normally")
+                # Execute code normally
+                exec_result = self._execution_ctx.run_cell(
+                    exec_unit.code_obj.code, exec_unit.display_id)
+
+            if exec_result.output is not None and not is_iter:
+                is_awaitable, is_gen, is_async_gen = inspect_output_attrs(
+                    exec_result.output)
+                self._log(item.request,
+                          f"{is_awaitable} {is_gen} {is_async_gen}")
+
+                # These flags should be disjoint (never multiple True at same time)
+                # but this layout allows for transforming a regular generator into an async generator
+                # with a small timeout, and then passing it to the
+                # async_gen branch
+
+                # If the output is awaitable, wait for it and then replace
+                # the old output
+                if is_awaitable:
+                    exec_result.output = await exec_result.output
+
+                # If the output is a regular generator, wrap it in an async
+                # generator that will add a very small delay
+                if is_gen:
+                    exec_result.output = convert_gen_to_async(
+                        exec_result.output, ReactivePythonKernel.REGULAR_GENERATOR_DELAY)()
+                    is_async_gen = True
+                    is_gen = False
+
+                # If it is an async generator, either replace the old
+                # generator that was active for this target name or
+                # register this completely new generator. Remove the old
+                # generator by canceling it
+                if is_async_gen:
+                    self._log(item.request, "Is now async gen!")
+                    setup_succeeded = await self._first_async_iter_step(
+                        item, exec_unit, exec_result)
+
+                    if not setup_succeeded:
                         break
-                else:
-                    # self._log(item.request, "Executing normally")
-                    # Execute code normally
-                    exec_result = self._execution_ctx.run_cell(
-                        exec_unit.code_obj.code, exec_unit.display_id)
 
-                if exec_result.output is not None and not is_iter:
-                    is_awaitable, is_gen, is_async_gen = inspect_output_attrs(
-                        exec_result.output)
-                    # self._log(item.request,
-                    #           f"{is_awaitable} {is_gen} {is_async_gen}")
+                if is_awaitable or is_gen or is_async_gen:
+                    self._execution_ctx.update_ns(
+                        {exec_result.target_id: exec_result.output})
 
-                    # These flags should be disjoint (never multiple True at same time)
-                    # but this layout allows for transforming a regular generator into an async generator
-                    # with a small timeout, and then passing it to the
-                    # async_gen branch
+            if not item.request.silent:
+                self._output_exec_results(
+                    exec_unit, item.request, is_current and not is_iter, exec_result)
 
-                    # If the output is awaitable, wait for it and then replace
-                    # the old output
-                    if is_awaitable:
-                        exec_result.output = await exec_result.output
-
-                    # If the output is a regular generator, wrap it in an async
-                    # generator that will add a very small delay
-                    if is_gen:
-                        exec_result.output = convert_gen_to_async(
-                            exec_result.output, ReactivePythonKernel.REGULAR_GENERATOR_DELAY)()
-                        is_async_gen = True
-                        is_gen = False
-
-                    # If it is an async generator, either replace the old
-                    # generator that was active for this target name or
-                    # register this completely new generator. Remove the old
-                    # generator by canceling it
-                    if is_async_gen:
-                        # self._log(item.request, "Is now async gen!")
-                        setup_succeeded = await self._first_async_iter_step(
-                            item, exec_unit, exec_result)
-
-                        if not setup_succeeded:
-                            break
-
-                    if is_awaitable or is_gen or is_async_gen:
-                        self._execution_ctx.update_ns(
-                            {exec_result.target_id: exec_result.output})
-
-                if not item.request.silent:
-                    self._output_exec_results(
-                        exec_unit, item.request, is_current and not is_iter, exec_result)
-
-            self._execution_queue.task_done()
+        self._execution_queue.task_done()
 
     def _update_existing_exec_unit(self, code_obj, cell_id):
         # 4a. If it is a redefinition, get the old execution unit
@@ -597,9 +605,10 @@ class ReactivePythonKernel(Kernel):
                     'name': 'stderr', 'text': stderr}, parent=request.parent)
 
     def _log(self, request, text):
-        self.session.send(
-            self.iopub_socket, 'stream', content={
-                'name': 'stdout', 'text': text + '\n'}, parent=request.parent)
+        if ReactivePythonKernel._DEBUG:
+            self.session.send(
+                self.iopub_socket, 'stream', content={
+                    'name': 'stdout', 'text': text + '\n'}, parent=request.parent)
 
     async def do_execute(self, request: RequestInfo):
         try:
