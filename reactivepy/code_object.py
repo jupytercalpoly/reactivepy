@@ -4,6 +4,8 @@ import builtins as builtins_mod
 from typing import List, FrozenSet
 from io import StringIO
 from hashlib import blake2b
+from .user_namespace import BuiltInManager
+
 
 ESCAPE_TABLE = str.maketrans({'\a': r'\a',
                               '\b': r'\b',
@@ -53,12 +55,46 @@ class CodeObject:
 
         return output.getvalue()
 
-    def __init__(self, code: str, key: bytes):
+    @staticmethod
+    def _find_input_variables(st, user_ns: BuiltInManager):
+        imports = set()
+        return list(CodeObject._find_symbol_tables(st, imports, user_ns))
+
+    @staticmethod
+    def _find_symbol_tables(symbols, imports, user_ns: BuiltInManager):
+        for sym in symbols.get_symbols():
+            if sym.is_imported():
+                imports.add(sym.get_name())
+
+            # and sym.get_name() != 'show_graph'
+
+            if sym.is_global() and not sym.get_name() in user_ns.global_ns['__builtins__'] and not sym.get_name() in imports:
+                yield SymbolWrapper(sym)
+
+        for a in symbols.get_children():
+            yield from CodeObject._find_symbol_tables(a, imports, user_ns)
+
+    @staticmethod
+    def _find_output_variables(st):
+        # return one top level defined variable, only including support for one
+        # as of now
+        output_vars = [SymbolWrapper(sym) for sym in st.get_symbols()
+                       if sym.is_assigned() or sym.is_imported()]
+
+        num_imports = sum(map(lambda sym: int(sym.is_imported()), output_vars))
+
+        if (len(output_vars) - num_imports) > 1:
+            raise MultipleDefinitionsError()
+        else:
+            return frozenset(output_vars)
+
+    def __init__(self, code: str, key: bytes, manager_ns: BuiltInManager):
         self.symbol_table: symtable = symtable(code, '<string>', 'exec')
         self.code: str = code
-        self.input_vars: List[SymbolWrapper] = self._find_input_variables()
-        self.output_vars: FrozenSet[SymbolWrapper] = self._find_output_variables(
-        )
+        self.input_vars: List[SymbolWrapper] = CodeObject._find_input_variables(self.symbol_table, manager_ns
+                                                                                )
+        self.output_vars: FrozenSet[SymbolWrapper] = CodeObject._find_output_variables(self.symbol_table
+                                                                                       )
 
         h = blake2b(digest_size=10, key=key)
         if len(self.output_vars) > 0:
@@ -68,35 +104,6 @@ class CodeObject:
         else:
             h.update(self.code.encode('utf-8'))
             self.display_id = f"{h.hexdigest()}"
-
-    def _find_input_variables(self):
-        imports = set()
-        return list(self._find_symbol_tables(self.symbol_table, imports))
-
-    def _find_symbol_tables(self, symbols, imports):
-        for sym in symbols.get_symbols():
-            if sym.is_imported():
-                imports.add(sym.get_name())
-
-            if sym.is_global() and not hasattr(builtins_mod,
-                                               sym.get_name()) and not sym.get_name() in imports:
-                yield SymbolWrapper(sym)
-
-        for a in symbols.get_children():
-            yield from self._find_symbol_tables(a, imports)
-
-    def _find_output_variables(self):
-        # return one top level defined variable, only including support for one
-        # as of now
-        output_vars = [SymbolWrapper(sym) for sym in self.symbol_table.get_symbols()
-                       if sym.is_assigned() or sym.is_imported()]
-
-        num_imports = sum(map(lambda sym: int(sym.is_imported()), output_vars))
-
-        if (len(output_vars) - num_imports) > 1:
-            raise MultipleDefinitionsError()
-        else:
-            return frozenset(output_vars)
 
     def __hash__(self):
         return hash(self.display_id)
