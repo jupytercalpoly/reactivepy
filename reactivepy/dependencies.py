@@ -59,6 +59,12 @@ class DependencyTracker(Generic[NodeT]):
         self._backward_edges = TransactionDict[NodeT, Set[NodeT]](
         )
 
+    def get_nodes(self) -> Set[NodeT]:
+        return set(self._nodes)
+
+    def get_neighbors(self, node: NodeT) -> Set[NodeT]:
+        return self._edges[node]
+
     def start_transaction(self):
         self._ordering.start_transaction()
         self._nodes.start_transaction()
