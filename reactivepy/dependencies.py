@@ -1,8 +1,8 @@
+import sys
 from collections import defaultdict
+from typing import TypeVar, Set, Generic, FrozenSet, List
 from .code_object import CodeObject, SymbolWrapper
 from .transactional import TransactionDict, TransactionSet
-import sys
-from typing import TypeVar, Set, Generic, FrozenSet, List
 
 
 class DuplicateCodeObjectAddedException(Exception):

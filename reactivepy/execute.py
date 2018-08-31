@@ -6,12 +6,12 @@ from ast import AST
 import ast
 from typing import List as ListType
 import traceback
-from IPython.core.ultratb import ListTB
-import IPython.core.ultratb as ultratb
 import linecache
 import time
-from tornado.ioloop import IOLoop
 from importlib.abc import InspectLoader
+from IPython.core.ultratb import ListTB
+import IPython.core.ultratb as ultratb
+from tornado.ioloop import IOLoop
 from .user_namespace import BuiltInManager
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)

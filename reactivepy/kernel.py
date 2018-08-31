@@ -1,28 +1,28 @@
-from ipykernel.kernelbase import Kernel
 import sys
-from .code_object import CodeObject, SymbolWrapper
-from .execute import Executor, ExecutionResult, CapturedIOCtx
-from .dependencies import DependencyTracker
 import traceback as tb
 from typing import Union, Any, Dict, FrozenSet
-from IPython.core.formatters import DisplayFormatter
-import IPython.core.ultratb as ultratb
 from importlib.abc import InspectLoader
-from .transactional import TransactionDict, TransactionalABC
-from tornado.ioloop import IOLoop
 from asyncio.locks import Lock
 from asyncio import Queue
 import asyncio
 import time
-from ipython_genutils import py3compat
-from ipykernel.jsonutil import json_clean
 from functools import partial
 from typing import Union, Tuple, List
 import random
 import string
 import inspect
-from graphviz import Digraph
 import builtins as builtin_mods
+from ipykernel.kernelbase import Kernel
+from IPython.core.formatters import DisplayFormatter
+import IPython.core.ultratb as ultratb
+from tornado.ioloop import IOLoop
+from ipython_genutils import py3compat
+from ipykernel.jsonutil import json_clean
+from graphviz import Digraph
+from .code_object import CodeObject, SymbolWrapper
+from .execute import Executor, ExecutionResult, CapturedIOCtx
+from .dependencies import DependencyTracker
+from .transactional import TransactionDict, TransactionalABC
 from .user_namespace import BuiltInManager
 
 __version__ = '0.1.0'
