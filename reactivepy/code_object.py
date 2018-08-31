@@ -56,23 +56,23 @@ class CodeObject:
         return output.getvalue()
 
     @staticmethod
-    def _find_input_variables(st, user_ns: BuiltInManager):
+    def _find_input_variables(st, ns_manager: BuiltInManager):
         imports = set()
-        return list(CodeObject._find_symbol_tables(st, imports, user_ns))
+        return list(CodeObject._find_symbol_tables(st, imports, ns_manager))
 
     @staticmethod
-    def _find_symbol_tables(symbols, imports, user_ns: BuiltInManager):
+    def _find_symbol_tables(symbols, imports, ns_manager: BuiltInManager):
         for sym in symbols.get_symbols():
             if sym.is_imported():
                 imports.add(sym.get_name())
 
             # and sym.get_name() != 'show_graph'
 
-            if sym.is_global() and not sym.get_name() in user_ns.global_ns['__builtins__'] and not sym.get_name() in imports:
+            if sym.is_global() and not sym.get_name() in ns_manager and not sym.get_name() in imports:
                 yield SymbolWrapper(sym)
 
         for a in symbols.get_children():
-            yield from CodeObject._find_symbol_tables(a, imports, user_ns)
+            yield from CodeObject._find_symbol_tables(a, imports, ns_manager)
 
     @staticmethod
     def _find_output_variables(st):
@@ -88,10 +88,10 @@ class CodeObject:
         else:
             return frozenset(output_vars)
 
-    def __init__(self, code: str, key: bytes, manager_ns: BuiltInManager):
+    def __init__(self, code: str, key: bytes, ns_manager: BuiltInManager):
         self.symbol_table: symtable = symtable(code, '<string>', 'exec')
         self.code: str = code
-        self.input_vars: List[SymbolWrapper] = CodeObject._find_input_variables(self.symbol_table, manager_ns
+        self.input_vars: List[SymbolWrapper] = CodeObject._find_input_variables(self.symbol_table, ns_manager
                                                                                 )
         self.output_vars: FrozenSet[SymbolWrapper] = CodeObject._find_output_variables(self.symbol_table
                                                                                        )

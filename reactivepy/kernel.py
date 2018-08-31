@@ -229,34 +229,36 @@ class ReactivePythonKernel(Kernel):
         self._dep_tracker = DependencyTracker()
         self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
-        self.manager_ns = BuiltInManager()
-        self.manager_ns.global_ns['__builtins__'] = builtin_mods.__dict__
-        self.manager_ns.global_ns['show_graph'] = self._show_graph
+        self.ns_manager = BuiltInManager()
+        self.initialize_builtins()
         self._execution_ctx = Executor(
-            self._exec_unit_container, manager_ns=self.manager_ns)
+            self._exec_unit_container, ns_manager=self.ns_manager)
         self.KernelTB = ultratb.AutoFormattedTB(mode='Plain',
                                                 color_scheme='LightBG',
                                                 tb_offset=1,
                                                 debugger_cls=None)
         self._execution_queue = Queue(loop=self._eventloop.asyncio_loop)
-        builtin_mods.show_graph = self._show_graph
-        # mapping from variable name (target id) to (request id, generator
-        # object)
         self._registered_generators = dict()
 
         self._eventloop.spawn_callback(
             self._execution_loop)
+    
+    def initialize_builtins(self):
+        self.ns_manager.add_builtin('show_graph', self._show_graph)
+
 
     def _show_graph(self):
         h = Digraph()
-        for i in self._dep_tracker.get_nodes():
-            for a in self._dep_tracker.get_neighbors(i):
-                first = i[:i.find('-')]
-                second = a[:a.find('-')]
-                for char in "[]":
-                    first = first.replace(char, "")
-                    second = second.replace(char, "")
-                h.edge(first, second)
+        for start_node in self._dep_tracker.get_nodes():
+            if "-" in start_node:
+                for dest_node in self._dep_tracker.get_neighbors(start_node):
+                    if "-" in dest_node:
+                        first = start_node[:start_node.find('-')]
+                        second = dest_node[:dest_node.find('-')]
+                        for char in "[]":
+                            first = first.replace(char, "")
+                            second = second.replace(char, "")
+                        h.edge(first, second)
         return h
 
     async def _run_single_async_iter_step(self, item, exec_unit):
@@ -624,7 +626,7 @@ class ReactivePythonKernel(Kernel):
         try:
             # 1. Create code object
             code_obj = CodeObject(request.code, self._key,
-                                  self._execution_ctx.manager_ns)
+                                  self._execution_ctx.ns_manager)
 
             # 2. Extract metadata (both are optional)
             cell_id = request.metadata['cellId'] if 'cellId' in request.metadata else None
