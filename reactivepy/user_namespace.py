@@ -41,7 +41,8 @@ class BuiltInManager:
         # self._current_local_ns.update(self._builtins)
 
     def reset(self):
-        self._init_nss()
+        self._current_global_ns = None
+        self._current_local_ns = None
 
     def __contains__(self, obj):
         return obj in self._builtins or obj in self._builtins['__builtins__']
