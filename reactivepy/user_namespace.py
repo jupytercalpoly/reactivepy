@@ -15,25 +15,25 @@ class BuiltInManager:
 
     def update(self, *args, **kwargs):
         if self._current_local_ns is None:
-            self._init_nss()
+            self._init_name_space()
 
         self._current_local_ns.update(*args, **kwargs)
 
     @property
     def global_ns(self):
         if self._current_global_ns is None:
-            self._init_nss()
+            self._init_name_space()
 
         return self._current_global_ns
 
     @property
     def local_ns(self):
         if self._current_local_ns is None:
-            self._init_nss()
+            self._init_name_space()
 
         return self._current_local_ns
 
-    def _init_nss(self):
+    def _init_name_space(self):
         self._current_global_ns = {}
         self._current_global_ns.update(self._builtins)
 

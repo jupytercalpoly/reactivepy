@@ -244,10 +244,11 @@ class ReactivePythonKernel(Kernel):
             self._execution_loop)
     
     def initialize_builtins(self):
-        self.ns_manager.add_builtin('show_graph', self._show_graph)
+        self.ns_manager.add_builtin('var_dependency_graph', self._var_dependency_graph)
+        self.ns_manager.add_builtin('cell_dependency_graph', self._cell_dependency_graph)
 
 
-    def _show_graph(self):
+    def _var_dependency_graph(self):
         h = Digraph()
         for start_node in self._dep_tracker.get_nodes():
             if "-" in start_node:
@@ -259,6 +260,17 @@ class ReactivePythonKernel(Kernel):
                             first = first.replace(char, "")
                             second = second.replace(char, "")
                         h.edge(first, second)
+        return h
+    
+    def _cell_dependency_graph(self):
+        h = Digraph()
+        for start_node in self._dep_tracker.get_nodes():
+            if "-" in start_node:
+                for dest_node in self._dep_tracker.get_neighbors(start_node):
+                    if "-" in dest_node:
+                        first = self._exec_unit_container.get_by_display_id(start_node).pinning_cell
+                        second = self._exec_unit_container.get_by_display_id(dest_node).pinning_cell
+                        h.edge(first,second)
         return h
 
     async def _run_single_async_iter_step(self, item, exec_unit):
