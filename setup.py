@@ -135,8 +135,7 @@ class CleanCommand(Command):
                     # Die if path in CLEAN_FILES is absolute + outside this
                     # directory
                     raise ValueError(
-                        "%s is not a path inside %s" %
-                        (path, HERE))
+                        f"{path} is not a path inside {HERE}" )
                 print('removing %s' % os.path.relpath(path))
                 shutil.rmtree(path)
 
