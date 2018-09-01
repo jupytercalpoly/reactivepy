@@ -34,3 +34,19 @@ pip install -e .
 - Move execution out of a queue, this will allow executions to interleave
 - Support deleting unnamed nodes (nodes which do not export any variables). This will reduce space usage and reduce unnecessary computation
 - Fix error with being unable to define a node after initially erroring out while creating it
+
+# Testing
+
+## Requirements
+
+Install `pytest` and `pytest-asyncio` using `conda` or `pip`:
+
+```bash
+conda install pytest pytest-asyncio
+```
+
+Then run
+
+```bash
+pytest .
+```

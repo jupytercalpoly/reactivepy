@@ -2,7 +2,8 @@ from collections import defaultdict
 from .code_object import CodeObject, SymbolWrapper
 from .transactional import TransactionDict, TransactionSet
 import sys
-from typing import TypeVar, Set, Generic, FrozenSet, List
+from typing import TypeVar, Set, Generic, FrozenSet, List, Dict, Optional
+from asyncio import AbstractEventLoop, Future, CancelledError, get_event_loop
 
 
 class DuplicateCodeObjectAddedException(Exception):
@@ -50,6 +51,7 @@ class DependencyTracker(Generic[NodeT]):
 
     def __init__(self):
         # exported variable(s) -> integer value denoting topological ordering
+        # lower values are ancestors of higher valued nodes
         self._ordering = TransactionDict[NodeT, int]()
         # exported variable(s)
         self._nodes = TransactionSet[NodeT]()
@@ -182,8 +184,7 @@ class DependencyTracker(Generic[NodeT]):
         for parent in self._edges[defined_vars]:
             self.delete_edge(parent, defined_vars)
 
-    def delete_edge(self, from_output_vars: NodeT,
-                    to_output_vars: NodeT):
+    def delete_edge(self, from_output_vars: NodeT, to_output_vars: NodeT):
         if from_output_vars not in self._nodes or to_output_vars not in self._nodes:
             raise CodeObjectNotFoundException()
 
@@ -193,8 +194,7 @@ class DependencyTracker(Generic[NodeT]):
         self._edges[from_output_vars].remove(to_output_vars)
         self._backward_edges[to_output_vars].remove(from_output_vars)
 
-    def get_descendants(
-            self, defined_vars: NodeT) -> List[NodeT]:
+    def get_descendants(self, defined_vars: NodeT) -> List[NodeT]:
         """Get all code objects that transitively depend on the given object"""
 
         if defined_vars not in self._nodes:
@@ -202,10 +202,19 @@ class DependencyTracker(Generic[NodeT]):
 
         visited = set()
         unique_descendants = set(
-            self._get_descendants(defined_vars, visited)) - {defined_vars}
+            self._get_descendants(
+                defined_vars,
+                visited)) - {defined_vars}
 
         return sorted(unique_descendants,
                       key=lambda node: self._ordering[node])
+
+    def get_descendants_unsorted(self, defined_vars: NodeT) -> Set[NodeT]:
+        visited = set()
+        unique_descendants = set(
+            self._get_descendants(defined_vars, visited)) - {defined_vars}
+
+        return unique_descendants
 
     def _get_descendants(self, output_vars, visited):
         if output_vars not in visited:
@@ -222,4 +231,105 @@ class DependencyTracker(Generic[NodeT]):
 
     def order_nodes(self, reverse=False) -> List[NodeT]:
         return sorted(self._nodes,
-                      key=lambda node: self._ordering[node.output_vars], reverse=reverse)
+                      key=lambda node: self._ordering[node], reverse=reverse)
+
+
+class DependencyLockContext:
+    def __init__(self, lock, node: NodeT):
+        self._lock = lock
+        self._node = node
+
+    async def __aenter__(self):
+        await self._lock.acquire(self._node)
+        # We have no use for the "as ..."  clause in the with
+        # statement for locks.
+        return None
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self._lock.release(self._node)
+
+
+class DependencyLock:
+    def __init__(
+            self, dep_graph: DependencyTracker[NodeT], *, loop: Optional[AbstractEventLoop]=None):
+        self._dep_graph = dep_graph
+        self._locked_nodes: Set[NodeT] = set()
+        self._waiting_for: Dict[NodeT, Set[NodeT]] = dict()
+        self._waiters: Dict[NodeT, Future] = dict()
+        if loop is None:
+            self._loop: AbstractEventLoop = get_event_loop()
+        else:
+            self._loop: AbstractEventLoop = loop
+
+    def locked(self, node: NodeT) -> bool:
+        """Test if the node is already locked"""
+        return node in self._locked_nodes
+
+    def would_lock(self, node: NodeT) -> bool:
+        """Returns true if the node would have to lock, or if it already locked"""
+        node_w_descendants = self._dep_graph.get_descendants_unsorted(node) | { node }
+        locked_descendants = { descendant for locked_node in self._locked_nodes for descendant in self._dep_graph.get_descendants_unsorted(locked_node) }
+
+        return self.locked(node) or not locked_descendants.isdisjoint(node_w_descendants)
+
+    async def acquire(self, node: NodeT) -> bool:
+        if not self.would_lock(node):
+            self._locked_nodes.add(node)
+            return True
+
+        if self.locked(node):
+            await self._waiters[node]
+
+        descendants = self._dep_graph.get_descendants_unsorted(node)
+        waiting_on = descendants & self._locked_nodes
+        fut = self._loop.create_future()
+        self._waiters[node] = fut
+        self._waiting_for[node] = waiting_on
+
+        try:
+            try:
+                await fut
+            finally:
+                del self._waiters[node]
+                del self._waiting_for[node]
+        except CancelledError:
+            if self.locked(node):
+                self._wake_up_node(node)
+            raise
+
+        self._locked_nodes.add(node)
+        return True
+
+    def release(self, node: NodeT) -> bool:
+        if self.locked(node):
+            self._locked_nodes.remove(node)
+            self._wake_up_node(node)
+        else:
+            raise RuntimeError(f'Lock for {node} not acquired')
+
+    def _wake_up_node(self, node: NodeT):
+        from queue import Queue
+        to_discard = Queue()
+        strip_completed = set()
+
+        to_discard.put_nowait(node)
+
+        while not to_discard.empty():
+            discard_node = to_discard.get_nowait()
+            strip_completed.add(discard_node)
+
+            for other_node in self._waiting_for:
+                self._waiting_for[other_node].discard(discard_node)
+
+                if len(self._waiting_for[other_node]
+                       ) == 0 and other_node not in strip_completed:
+                    to_discard.put_nowait(other_node)
+
+        for complete_node in iter(strip_completed):
+            fut = self._waiters.get(complete_node)
+            if fut is not None and not fut.done():
+                LOGGER.info('Completing {} for {}'.format(complete_node, node))
+                fut.set_result(True)
+
+    def ctx_for(self, node: NodeT) -> DependencyLockContext:
+        return DependencyLockContext(self, node)
