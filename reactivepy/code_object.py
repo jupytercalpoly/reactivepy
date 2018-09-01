@@ -24,14 +24,14 @@ class CodeObject:
     def describe_symbol(sym):
         output = StringIO()
         assert isinstance(sym, symt.Symbol)
-        print("Symbol:", sym.get_name(), file=output)
+        print(f"Symbol: {sym.get_name()}", file=output)
 
         for prop in [
                 'referenced', 'imported', 'parameter',
                 'global', 'declared_global', 'local',
                 'free', 'assigned', 'namespace']:
             if getattr(sym, 'is_' + prop)():
-                print('    is', prop, file=output)
+                print(f'    is {prop}', file=output)
 
         return output.getvalue()
 
@@ -39,7 +39,7 @@ class CodeObject:
     def describe_symtable(st, recursive=True, indent=0, output=StringIO()):
         def print_d(s, *args, **kwargs):
             prefix = ' ' * indent
-            print(prefix + s, *args, **kwargs)
+            print(f"{prefix}{s} {*args} {**kwargs}")
 
         assert isinstance(st, symt.SymbolTable)
         print_d('Symtable: type=%s, id=%s, name=%s' % (
