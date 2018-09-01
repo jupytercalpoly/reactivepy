@@ -137,7 +137,7 @@ class CleanCommand(Command):
                     raise ValueError(
 
                         f"{path} is not a path inside {HERE}" )
-                print('removing %s' % os.path.relpath(path))
+                print(f"removing {os.path.relpath(path)}")
 
                 shutil.rmtree(path)
 
