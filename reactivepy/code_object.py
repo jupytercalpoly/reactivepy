@@ -41,7 +41,7 @@ class CodeObject:
     def describe_symtable(st, recursive=True, indent=0, output=StringIO()):
         def print_d(s, *args, **kwargs):
             prefix = ' ' * indent
-            print(prefix + s, *args, **kwargs)
+            print("{prefix}{s}", *args, **kwargs)
 
         assert isinstance(st, symt.SymbolTable)
         print_d(f'Symtable: type={st.get_type()}, id={st.get_id()}, name={st.get_name()}', file=output)
