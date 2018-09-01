@@ -24,7 +24,9 @@ class CodeObject:
     def describe_symbol(sym):
         output = StringIO()
         assert isinstance(sym, symt.Symbol)
-        print(f"Symbol: {sym.get_name()}", file=output)
+
+        print(f"Symbol: {sym.get_name()}",  file=output)
+
 
         for prop in [
                 'referenced', 'imported', 'parameter',
@@ -42,11 +44,10 @@ class CodeObject:
             print(f"{prefix}{s} {*args} {**kwargs}")
 
         assert isinstance(st, symt.SymbolTable)
-        print_d('Symtable: type=%s, id=%s, name=%s' % (
-            st.get_type(), st.get_id(), st.get_name()), file=output)
-        print_d('  nested:', st.is_nested(), file=output)
-        print_d('  has children:', st.has_children(), file=output)
-        print_d('  identifiers:', list(st.get_identifiers()), file=output)
+        print_d(f'Symtable: type={st.get_type()}, id={st.get_id()}, name={st.get_name()}', file=output)
+        print_d(f'  nested: {st.is_nested()}', file=output)
+        print_d(f'  has children:{st.has_children()}', file=output)
+        print_d(f'  identifiers: {list(st.get_identifiers())}', file=output)
 
         if recursive:
             for child_st in st.get_children():
