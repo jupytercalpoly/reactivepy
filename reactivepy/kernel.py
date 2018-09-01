@@ -508,7 +508,8 @@ class ReactivePythonKernel(Kernel):
         try:
             request = RequestInfo(parent, ident)
         except BaseException:
-            self.log.error(f"Got bad msg: {parent}")
+            self.log.error("Got bad msg: ")
+            self.log.error("%s", parent)
             return
 
         # Re-broadcast our input for the benefit of listening clients, and
@@ -542,7 +543,7 @@ class ReactivePythonKernel(Kernel):
                                       reply_content, parent, metadata=response_meta,
                                       ident=ident)
 
-        self.log.debug(f"{reply_msg}")
+        self.log.debug("%s", reply_msg)
 
         if not request.silent and reply_msg['content']['status'] == u'error' and stop_on_error:
             self._abort_queues()

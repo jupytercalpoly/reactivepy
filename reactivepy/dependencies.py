@@ -84,7 +84,7 @@ class DependencyTracker(Generic[NodeT]):
         self._backward_edges.rollback()
 
     def add_node(self, defined_vars: NodeT):
-        """Add a new code object to the dependency graph
+        """"Add a new code object to the dependency graph
 
         Initially this object has no dependencies
         """
