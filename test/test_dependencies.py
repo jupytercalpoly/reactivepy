@@ -1,5 +1,5 @@
 import asyncio as aio
-from reactivepy.dependencies import DependencyLock, DependencyTracker
+from reactivepy.dependencies import DependencyTracker
 import pytest
 
 
@@ -48,11 +48,6 @@ def dep_tracker_3():
     tracker.add_edge(6, 7)
 
     return tracker
-
-
-@pytest.fixture
-def dep_lock(dep_tracker_3, event_loop):
-    return DependencyLock(dep_tracker_3, loop=event_loop)
 
 
 class TestDependencyTracker(object):
@@ -122,81 +117,3 @@ class TestDependencyTracker(object):
         assert dep_tracker_3.get_descendants(5) == [7]
         assert dep_tracker_3.get_descendants(6) == [7]
         assert dep_tracker_3.get_descendants(7) == []
-
-
-class TestDependencyLock(object):
-    def test_create_lock(self, dep_tracker, event_loop):
-        lock = DependencyLock(dep_tracker, loop=event_loop)
-
-        assert not lock.locked(1)
-
-    @pytest.mark.asyncio
-    async def test_acquire_node(self, dep_lock, event_loop):
-        await dep_lock.acquire(3)
-
-        assert dep_lock.locked(3)
-        assert dep_lock.would_lock(4)
-        assert dep_lock.would_lock(5)
-        assert dep_lock.would_lock(6)
-        assert dep_lock.would_lock(7)
-
-        dep_lock.release(3)
-
-        assert not dep_lock.locked(3)
-        assert not dep_lock.would_lock(4)
-        assert not dep_lock.would_lock(5)
-        assert not dep_lock.would_lock(6)
-        assert not dep_lock.would_lock(7)
-
-    @pytest.mark.asyncio
-    async def test_acquire_node_disjoint(self, dep_lock, event_loop):
-        await dep_lock.acquire(4)
-        assert dep_lock.locked(4)
-        assert not dep_lock.would_lock(5)
-        await dep_lock.acquire(5)
-        assert dep_lock.locked(5)
-
-        dep_lock.release(4)
-        assert not dep_lock.locked(4)
-
-        dep_lock.release(5)
-        assert not dep_lock.locked(5)
-
-    def test_acquire_node_ordering(self, dep_lock, event_loop):
-        order = []
-
-        async def thread_1():
-            order.append(1)
-            await dep_lock.acquire(1)
-            order.append(2)
-            assert dep_lock.locked(1)
-            assert dep_lock.would_lock(2)
-
-            order.append(3)
-            await aio.sleep(1)
-            order.append(5)
-
-            dep_lock.release(1)
-            order.append(6)
-
-        async def thread_2():
-            order.append(4)
-            assert dep_lock.would_lock(2)
-            await dep_lock.acquire(2)
-            order.append(7)
-            assert dep_lock.locked(2)
-
-            dep_lock.release(2)
-            order.append(8)
-
-            event_loop.stop()
-
-        t1 = event_loop.create_task(thread_1())
-        assert not t1.done()
-
-        t2 = event_loop.create_task(thread_2())
-        assert not t2.done()
-
-        event_loop.run_forever()
-
-        assert order == [1, 2, 3, 4, 5, 6, 7, 8]
