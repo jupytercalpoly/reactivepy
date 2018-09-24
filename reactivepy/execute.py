@@ -12,14 +12,10 @@ import linecache
 import time
 from tornado.ioloop import IOLoop
 from importlib.abc import InspectLoader
+from typing import Callable, Optional, Any
 
 _assign_nodes = (ast.AugAssign, ast.AnnAssign, ast.Assign)
 _single_targets_nodes = (ast.AugAssign, ast.AnnAssign)
-
-
-class LineCachingFailedException(Exception):
-    """Caching the provided code in the global line cache failed"""
-    pass
 
 
 class IncompleteExecutionResultException(Exception):
@@ -57,11 +53,11 @@ class ExecutionResult:
 
 
 class CapturedIOCtx(object):
-    def __init__(self, container_func, capture_stdout=True,
+    def __init__(self, container_func: Callable[[str, str], Any], capture_stdout=True,
                  capture_stderr=True):
         self.capture_stdout = capture_stdout
         self.capture_stderr = capture_stderr
-        self.container_func = container_func
+        self.container_func: Callable[[str, str], Any] = container_func
 
     def __enter__(self):
         self.sys_stdout = sys.stdout
@@ -81,8 +77,9 @@ class CapturedIOCtx(object):
 
 
 class CapturedDisplayCtx(object):
-    def __init__(self, capture_func):
-        self.capture_func = capture_func
+    def __init__(self, capture_func: Callable[[Any], Any]):
+        self.capture_func: Callable[[Any], Any] = capture_func
+        self.sys_displayhook: Optional[Callable[[Any], Any]] = None
 
     def __enter__(self):
         self.sys_displayhook = sys.displayhook
@@ -96,6 +93,11 @@ class CapturedDisplayCtx(object):
 
 
 class Executor:
+    """The executor handles executing snippets of code and managing the user namespace accordingly.
+
+    It also can run asynchronous functions (coroutines)
+    """
+
     def __init__(self, loader: InspectLoader):
         self.user_ns = {}
         self.loader = loader
@@ -149,11 +151,9 @@ class Executor:
         self.user_ns.update(*args, **kwargs)
 
     def run_cell(self, code, name):
-        cache_result = linecache.lazycache(
+        linecache.lazycache(
             name, {
                 '__name__': name, '__loader__': self.loader})
-        if not cache_result:
-            raise LineCachingFailedException()
 
         exec_result = ExecutionResult()
 
