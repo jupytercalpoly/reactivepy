@@ -1,29 +1,26 @@
-from ipykernel.kernelbase import Kernel
 import sys
-from .code_object import CodeObject, SymbolWrapper
-from .execute import Executor, ExecutionResult, CapturedIOCtx
-from .dependencies import DependencyTracker
-import traceback as tb
-from typing import Any, Dict, FrozenSet
-from IPython.core.formatters import DisplayFormatter
-import IPython.core.ultratb as ultratb
+from typing import Optional
 from importlib.abc import InspectLoader
-from .transactional import TransactionDict, TransactionalABC
-from tornado.ioloop import IOLoop
 from asyncio.locks import Lock
 from asyncio import CancelledError
 import asyncio
-import time
-from ipython_genutils import py3compat
-from ipykernel.jsonutil import json_clean
-from jupyter_client.session import utcnow as now
-from functools import partial
-from typing import Tuple, List, Optional
 import random
 import string
 import inspect
-from functools import total_ordering
-from enum import IntEnum
+import time
+from IPython.core.formatters import DisplayFormatter
+import IPython.core.ultratb as ultratb
+from ipython_genutils import py3compat
+from ipykernel.jsonutil import json_clean
+from ipykernel.kernelbase import Kernel
+from jupyter_client.session import utcnow as now
+from tornado.ioloop import IOLoop
+from graphviz import Digraph
+from .code_object import CodeObject, SymbolWrapper
+from .execute import Executor, ExecutionResult
+from .dependencies import DependencyTracker
+from .transactional import TransactionDict, TransactionalABC
+from .user_namespace import BuiltInManager
 
 __version__ = '0.1.0'
 
@@ -208,15 +205,48 @@ class ReactivePythonKernel(Kernel):
         self._dep_tracker = DependencyTracker()
         self._exec_unit_container = ExecUnitContainer()
         self.formatter = DisplayFormatter()
+        self.ns_manager = BuiltInManager()
+        self.initialize_builtins()
         self._execution_ctx = Executor(
-            self._exec_unit_container)
+            self._exec_unit_container, ns_manager=self.ns_manager)
         self.KernelTB = ultratb.AutoFormattedTB(mode='Plain',
                                                 color_scheme='LightBG',
                                                 tb_offset=1,
                                                 debugger_cls=None)
+
         # mapping from variable name (target id) to (request id, generator
         # object)
         self._registered_generators = dict()
+
+    def initialize_builtins(self):
+        self.ns_manager.add_builtin('var_dependency_graph', self._var_dependency_graph)
+        self.ns_manager.add_builtin('cell_dependency_graph', self._cell_dependency_graph)
+
+
+    def _var_dependency_graph(self):
+        h = Digraph()
+        for start_node in self._dep_tracker.get_nodes():
+            if "-" in start_node:
+                for dest_node in self._dep_tracker.get_neighbors(start_node):
+                    if "-" in dest_node:
+                        first = start_node[:start_node.find('-')]
+                        second = dest_node[:dest_node.find('-')]
+                        for char in "[]":
+                            first = first.replace(char, "")
+                            second = second.replace(char, "")
+                        h.edge(first, second)
+        return h
+    
+    def _cell_dependency_graph(self):
+        h = Digraph()
+        for start_node in self._dep_tracker.get_nodes():
+            if "-" in start_node:
+                for dest_node in self._dep_tracker.get_neighbors(start_node):
+                    if "-" in dest_node:
+                        first = self._exec_unit_container.get_by_display_id(start_node).pinning_cell
+                        second = self._exec_unit_container.get_by_display_id(dest_node).pinning_cell
+                        h.edge(first,second)
+        return h
 
     def _update_existing_exec_unit(self, code_obj, cell_id):
         # 1. If it is a redefinition, get the old execution unit
@@ -415,8 +445,8 @@ class ReactivePythonKernel(Kernel):
     async def do_execute(self, request: RequestInfo):
         try:
             # 1. Create code object
-            code_obj = CodeObject(request.code, self._key)
-            self._log(request, 'Created a code obj: {}'.format(code_obj))
+            code_obj = CodeObject(request.code, self._key,
+                                  self._execution_ctx.ns_manager)
 
             # 2. Extract metadata (both are optional)
             cell_id = request.metadata['cellId'] if 'cellId' in request.metadata else None

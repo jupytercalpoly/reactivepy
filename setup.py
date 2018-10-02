@@ -39,7 +39,7 @@ def install_kernel_spec(user=True, prefix=None):
 
         # TODO: Copy any resources
 
-        print('Installing Jupyter kernel spec to', prefix)
+        print(f'Installing Jupyter kernel spec to {prefix}')
         KernelSpecManager().install_kernel_spec(
             td, 'reactivepy', user=user, prefix=prefix)
 
@@ -135,9 +135,10 @@ class CleanCommand(Command):
                     # Die if path in CLEAN_FILES is absolute + outside this
                     # directory
                     raise ValueError(
-                        "%s is not a path inside %s" %
-                        (path, HERE))
-                print('removing %s' % os.path.relpath(path))
+
+                        f"{path} is not a path inside {HERE}" )
+                print(f"removing {os.path.relpath(path)}")
+
                 shutil.rmtree(path)
 
 
@@ -153,13 +154,15 @@ setup(name='reactivepy',
       requires=[
           'ipython',
           'jupyter_client', 'tornado',
-          'ipykernel'
+          'ipykernel',
+          'graphviz'
       ],
       install_requires=[
           'ipython>=4.0.0',
           'jupyter_client',
           'tornado>=4.0',
-          'ipykernel>=4.8'
+          'ipykernel>=4.8',
+          'graphviz'
       ],
       classifiers=[
           'Intended Audience :: Developers',

@@ -1,9 +1,6 @@
 from collections import defaultdict
-from .code_object import CodeObject, SymbolWrapper
+from typing import TypeVar, Set, Generic, List
 from .transactional import TransactionDict, TransactionSet
-import sys
-from typing import TypeVar, Set, Generic, FrozenSet, List, Dict, Optional
-from asyncio import AbstractEventLoop, Future, CancelledError, get_event_loop
 
 
 class DuplicateCodeObjectAddedException(Exception):
@@ -61,6 +58,12 @@ class DependencyTracker(Generic[NodeT]):
         self._backward_edges = TransactionDict[NodeT, Set[NodeT]](
         )
 
+    def get_nodes(self) -> Set[NodeT]:
+        return set(self._nodes)
+
+    def get_neighbors(self, node: NodeT) -> Set[NodeT]:
+        return self._edges[node]
+
     def start_transaction(self):
         self._ordering.start_transaction()
         self._nodes.start_transaction()
@@ -80,7 +83,7 @@ class DependencyTracker(Generic[NodeT]):
         self._backward_edges.rollback()
 
     def add_node(self, defined_vars: NodeT):
-        """"Add a new code object to the dependency graph
+        """Add a new code object to the dependency graph
 
         Initially this object has no dependencies
         """
