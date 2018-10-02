@@ -401,8 +401,6 @@ class ReactivePythonKernel(Kernel):
             self, exec_unit: ExecutionUnitInfo, request: RequestInfo,
             is_current: bool, exec_result: ExecutionResult):
 
-        self._log(request, 'Outputing for {}'.format(exec_unit.display_id))
-
         # 6b. Determine whether the current execution unit will be
         # directly display or update
         message_mode = 'update_display_data' if not is_current else 'display_data'
@@ -468,7 +466,6 @@ class ReactivePythonKernel(Kernel):
             is_awaitable, is_gen, is_async_gen = False, False, False
             current_result = self._execution_ctx.run_cell(current_exec_unit.code_obj.code, current_exec_unit.display_id)
 
-            self._log(request, 'Output is {}'.format(current_result.output))
             if current_result.output is not None:
                 is_awaitable, is_gen, is_async_gen = inspect_output_attrs(current_result.output)
 
@@ -493,7 +490,6 @@ class ReactivePythonKernel(Kernel):
                     self._execution_ctx.update_ns(
                         {current_result.target_id: current_result.output})
 
-                self._log(request, '{} = {}'.format(current_result.target_id, current_result.output))
 
             if not request.silent:
                 self._output_exec_results(
@@ -602,14 +598,11 @@ class ReactivePythonKernel(Kernel):
             new_start = now()
             if new_start > old_start:
                 old_task.cancel()
-                self._log(request, f"{hexdigest(new_start)}: Starting async iter for {target_id}")
                 new_task = self._eventloop.create_task(
                     self._run_async_iter(new_start, exec_unit, async_gen_obj, target_id, request))
-                self._log(request, 'Cancelling {} for {}'.format(old_task, new_task))
                 self._registered_generators[exec_unit.display_id] = new_start, new_task
         else:
             new_start = now()
-            self._log(request, f"{hexdigest(new_start)}: Starting async iter for {target_id}")
             new_task = self._eventloop.create_task(
                 self._run_async_iter(new_start, exec_unit, async_gen_obj, target_id, request))
             self._registered_generators[exec_unit.display_id] = new_start, new_task
@@ -619,7 +612,6 @@ class ReactivePythonKernel(Kernel):
         try:
             while True:
                 # Get next value and update namespace
-                self._log(request, f"{hexdigest(started)}: Locked {exec_unit.display_id}")
                 try:
                     exec_result = await self._execution_ctx.run_coroutine(
                         anext(async_gen_obj), target_id,
@@ -630,8 +622,6 @@ class ReactivePythonKernel(Kernel):
                 except GeneratorExit as e:
                     # Generator cancelled
                     break
-
-                self._log(request, f"{hexdigest(started)}: Stepped async iter {target_id} to value {exec_result.output}")
 
                 # Output values to the front end
                 self._output_exec_results(exec_unit, request, False, exec_result)
@@ -661,9 +651,6 @@ class ReactivePythonKernel(Kernel):
             if not request.silent:
                 self.session.send(self.iopub_socket,
                                   'error', content=error_content, parent=request.parent)
-    
-    def _log(self, request: RequestInfo, message: str):
-        self.log.warn(f"{hexdigest(request.msg_id)}: {message}")
 
 
 async def anext(*args):
