@@ -14,10 +14,11 @@ class BuiltInManager:
         self._builtins[name] = obj
 
     def update(self, *args, **kwargs):
-        if self._current_local_ns is None:
+        if self._current_local_ns is None or self._current_global_ns is None:
             self._init_name_space()
 
         self._current_local_ns.update(*args, **kwargs)
+        self._current_global_ns.update(*args, **kwargs)
 
     @property
     def global_ns(self):
@@ -46,4 +47,3 @@ class BuiltInManager:
 
     def __contains__(self, obj):
         return obj in self._builtins or obj in self._builtins['__builtins__']
-

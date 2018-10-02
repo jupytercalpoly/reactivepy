@@ -206,7 +206,7 @@ class Executor:
         try:
             try:
                 exec(code_obj, self.ns_manager.global_ns,
-                     self.ns_manager.local_ns)
+                     self.ns_manager.global_ns)
             finally:
                 # Reset our crash handler in place
                 sys.excepthook = old_excepthook
