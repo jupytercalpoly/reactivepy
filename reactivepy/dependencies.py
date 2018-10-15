@@ -1,7 +1,5 @@
-import sys
 from collections import defaultdict
-from typing import TypeVar, Set, Generic, FrozenSet, List
-from .code_object import CodeObject, SymbolWrapper
+from typing import TypeVar, Set, Generic, List
 from .transactional import TransactionDict, TransactionSet
 
 
@@ -50,6 +48,7 @@ class DependencyTracker(Generic[NodeT]):
 
     def __init__(self):
         # exported variable(s) -> integer value denoting topological ordering
+        # lower values are ancestors of higher valued nodes
         self._ordering = TransactionDict[NodeT, int]()
         # exported variable(s)
         self._nodes = TransactionSet[NodeT]()
@@ -188,8 +187,7 @@ class DependencyTracker(Generic[NodeT]):
         for parent in self._edges[defined_vars]:
             self.delete_edge(parent, defined_vars)
 
-    def delete_edge(self, from_output_vars: NodeT,
-                    to_output_vars: NodeT):
+    def delete_edge(self, from_output_vars: NodeT, to_output_vars: NodeT):
         if from_output_vars not in self._nodes or to_output_vars not in self._nodes:
             raise CodeObjectNotFoundException()
 
@@ -199,8 +197,7 @@ class DependencyTracker(Generic[NodeT]):
         self._edges[from_output_vars].remove(to_output_vars)
         self._backward_edges[to_output_vars].remove(from_output_vars)
 
-    def get_descendants(
-            self, defined_vars: NodeT) -> List[NodeT]:
+    def get_descendants(self, defined_vars: NodeT) -> List[NodeT]:
         """Get all code objects that transitively depend on the given object"""
 
         if defined_vars not in self._nodes:
@@ -208,10 +205,19 @@ class DependencyTracker(Generic[NodeT]):
 
         visited = set()
         unique_descendants = set(
-            self._get_descendants(defined_vars, visited)) - {defined_vars}
+            self._get_descendants(
+                defined_vars,
+                visited)) - {defined_vars}
 
         return sorted(unique_descendants,
                       key=lambda node: self._ordering[node])
+
+    def get_descendants_unsorted(self, defined_vars: NodeT) -> Set[NodeT]:
+        visited = set()
+        unique_descendants = set(
+            self._get_descendants(defined_vars, visited)) - {defined_vars}
+
+        return unique_descendants
 
     def _get_descendants(self, output_vars, visited):
         if output_vars not in visited:
@@ -228,4 +234,4 @@ class DependencyTracker(Generic[NodeT]):
 
     def order_nodes(self, reverse=False) -> List[NodeT]:
         return sorted(self._nodes,
-                      key=lambda node: self._ordering[node.output_vars], reverse=reverse)
+                      key=lambda node: self._ordering[node], reverse=reverse)
