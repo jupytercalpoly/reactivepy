@@ -1,5 +1,7 @@
 # reactivepy
 
+[![Binder](https://beta.mybinder.org/badge.svg)](https://mybinder.org/v2/gh/jupytercalpoly/reactivepy/master?urlpath=lab/tree/examples/BasicAsyncGenerators.ipynb)
+
 A reactive Python kernel. Whenever a variable value is changed, the kernel automatically executes its dependencies (any cells which use that variable) with the updated value. As of now, reactivepy can also support asynchronous functions. 
 
 Each notebook cell for a reactive kernel contains a single definition of a
