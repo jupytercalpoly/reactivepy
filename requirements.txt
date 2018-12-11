@@ -1,3 +1,0 @@
-aiohttp
-pandas
-altair
