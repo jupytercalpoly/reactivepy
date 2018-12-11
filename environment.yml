@@ -1,0 +1,9 @@
+name: reactivepy
+channels:
+  - conda-forge
+dependencies:
+  - graphviz
+  - pip:
+    - aiohttp
+    - pandas
+    - altair

@@ -153,14 +153,15 @@ setup(name='reactivepy',
       license='BSD 3-Clause License',
       requires=[
           'ipython',
-          'jupyter_client', 'tornado',
+          'jupyter_client', 
+          'tornado',
           'ipykernel',
           'graphviz'
       ],
       install_requires=[
           'ipython>=4.0.0',
           'jupyter_client',
-          'tornado>=4.0',
+          'tornado>=5.0',
           'ipykernel>=4.8',
           'graphviz'
       ],
